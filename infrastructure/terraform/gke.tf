@@ -1,0 +1,152 @@
+# GKE Standard regional cluster with:
+#  - Default node pool removed
+#  - A minimal "system" pool for kube-system / DaemonSets
+#  - Node Auto-Provisioning (NAP) enabled so workload nodes are created on demand
+#  - Gateway API controller enabled (CHANNEL_STANDARD)
+#  - ComputeClass for app workloads is defined in k8s/05-compute-class.yaml,
+#    which targets Spot VMs with on-demand fallback.
+resource "google_container_cluster" "primary" {
+  name     = var.cluster_name
+  location = var.region # regional control plane = HA
+
+  # We replace the default pool with our own minimal system pool below.
+  remove_default_node_pool = true
+  initial_node_count       = 1
+
+  network    = google_compute_network.vpc.id
+  subnetwork = google_compute_subnetwork.subnet.id
+
+  ip_allocation_policy {
+    cluster_secondary_range_name  = "pods"
+    services_secondary_range_name = "services"
+  }
+
+  # ---- Private cluster ----
+  # Nodes get only internal IPs (no public IP — outbound via Cloud NAT).
+  # The control plane endpoint stays public so kubectl works from a laptop,
+  # but is locked down by master_authorized_networks below.
+  private_cluster_config {
+    enable_private_nodes    = true
+    enable_private_endpoint = false
+    master_ipv4_cidr_block  = var.master_ipv4_cidr_block
+
+    master_global_access_config {
+      enabled = true
+    }
+  }
+
+  master_authorized_networks_config {
+    dynamic "cidr_blocks" {
+      for_each = var.master_authorized_networks
+      content {
+        cidr_block   = cidr_blocks.value
+        display_name = "authorized-${replace(cidr_blocks.value, "/", "-")}"
+      }
+    }
+  }
+
+  release_channel {
+    channel = var.release_channel
+  }
+
+  # Enable the Kubernetes Gateway API controller (provides
+  # `gke-l7-global-external-managed` and friends).
+  gateway_api_config {
+    channel = var.gateway_api_channel
+  }
+
+  workload_identity_config {
+    workload_pool = "${var.project_id}.svc.id.goog"
+  }
+
+  # Node Auto-Provisioning: when a pod is unschedulable, GKE creates a new
+  # node pool sized for the pod's resource requests + the ComputeClass it
+  # asks for. Pools scale back to zero when idle.
+  cluster_autoscaling {
+    enabled = true
+
+    resource_limits {
+      resource_type = "cpu"
+      minimum       = 1
+      maximum       = var.nap_cpu_limit
+    }
+    resource_limits {
+      resource_type = "memory"
+      minimum       = 1
+      maximum       = var.nap_memory_limit_gb
+    }
+
+    auto_provisioning_defaults {
+      service_account = google_service_account.gke_nodes.email
+      oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+      disk_type       = var.nap_disk_type
+      disk_size       = var.nap_disk_size_gb
+
+      management {
+        auto_repair  = true
+        auto_upgrade = true
+      }
+
+      shielded_instance_config {
+        enable_secure_boot          = true
+        enable_integrity_monitoring = true
+      }
+    }
+  }
+
+  addons_config {
+    horizontal_pod_autoscaling { disabled = false }
+    http_load_balancing        { disabled = false }
+    network_policy_config      { disabled = false }
+  }
+
+  # Installs the Secret Manager CSI driver and registers the
+  # SecretProviderClass CRD in the cluster.
+  secret_manager_config {
+    enabled = true
+  }
+
+  deletion_protection = false
+  depends_on          = [google_project_service.enabled]
+}
+
+# Minimal pool that hosts kube-system, DNS, metrics — anything we don't want
+# evicted by a Spot reclamation event.
+resource "google_container_node_pool" "system" {
+  name     = var.system_pool_name
+  cluster  = google_container_cluster.primary.name
+  location = google_container_cluster.primary.location
+
+  # nodes per zone → multiplied by zones in a regional cluster
+  node_count = var.system_node_count
+
+  management {
+    auto_repair  = true
+    auto_upgrade = true
+  }
+
+  node_config {
+    machine_type    = var.system_node_machine_type
+    disk_size_gb    = var.system_node_disk_size_gb
+    disk_type       = var.system_node_disk_type
+    service_account = google_service_account.gke_nodes.email
+    oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    labels = {
+      "workload" = "system"
+    }
+    # Tainted so only system-tolerant pods land here. NAP-created Spot
+    # nodes for app workloads carry the cloud.google.com/gke-spot taint
+    # which app deployments tolerate explicitly.
+    taint {
+      key    = "workload"
+      value  = "system"
+      effect = "PREFER_NO_SCHEDULE"
+    }
+
+    shielded_instance_config {
+      enable_secure_boot          = true
+      enable_integrity_monitoring = true
+    }
+  }
+}

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments/layout :: head('Nova Store · Shop the Future')}"></head>
+<body>
+<div th:replace="~{fragments/layout :: orbs}"></div>
+<nav th:replace="~{fragments/layout :: nav(${cartCount})}"></nav>
+
+<main>
+    <!-- HERO + DISCOUNT BANNER -->
+    <section class="hero">
+        <div class="hero-banner">
+            <div class="hero-badge">⚡ FLASH SALE ENDS TONIGHT</div>
+            <h1 class="hero-title">
+                Up to <span class="gradient-text">40% OFF</span><br>
+                Everything you love.
+            </h1>
+            <p class="hero-sub">Free shipping on orders over $50 · Curated picks · Refreshed daily from our catalog</p>
+            <a href="#products" class="btn-primary">Shop the Drop →</a>
+
+            <div class="hero-stats">
+                <div><strong>10K+</strong><span>Happy Customers</span></div>
+                <div><strong>4.9★</strong><span>Avg Rating</span></div>
+                <div><strong>24h</strong><span>Delivery</span></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Marquee announcement -->
+    <div class="marquee" aria-hidden="true">
+        <div class="marquee-track">
+            <span>★ FREE SHIPPING OVER $50</span><span>·</span>
+            <span>🔥 DAILY DEALS</span><span>·</span>
+            <span>💎 NEW ARRIVALS EVERY WEEK</span><span>·</span>
+            <span>🎁 GIFT CARDS AVAILABLE</span><span>·</span>
+            <span>★ FREE SHIPPING OVER $50</span><span>·</span>
+            <span>🔥 DAILY DEALS</span><span>·</span>
+            <span>💎 NEW ARRIVALS EVERY WEEK</span><span>·</span>
+            <span>🎁 GIFT CARDS AVAILABLE</span><span>·</span>
+        </div>
+    </div>
+
+    <!-- CATEGORY FILTER -->
+    <section class="filters" id="products">
+        <a th:href="@{/}" class="filter-pill" th:classappend="${activeCategory == null} ? 'is-active' : ''">All</a>
+        <a th:each="c : ${categories}"
+           th:href="@{/(category=${c})}"
+           th:text="${c}"
+           class="filter-pill"
+           th:classappend="${activeCategory == c} ? 'is-active' : ''">cat</a>
+    </section>
+
+    <!-- PRODUCT GRID -->
+    <section class="grid">
+        <article th:each="p, iter : ${products}"
+                 class="card"
+                 th:style="'animation-delay:' + ${iter.index * 60} + 'ms'">
+            <div class="card-media">
+                <img th:src="${p.image}" th:alt="${p.title}" loading="lazy">
+                <span th:if="${p.discount != null and p.discount > 0}"
+                      class="badge-discount"
+                      th:text="'-' + ${p.discount} + '%'">-20%</span>
+            </div>
+            <div class="card-body">
+                <span class="card-cat" th:text="${p.category}">cat</span>
+                <h3 class="card-title" th:text="${p.title}">Title</h3>
+                <div class="card-rating">
+                    <span th:if="${p.rating != null}" th:text="'★ ' + ${p.rating.rate}">★ 4.5</span>
+                </div>
+                <div class="card-foot">
+                    <div class="price">
+                        <span class="price-now" th:text="'$' + ${p.price}">$0.00</span>
+                    </div>
+                    <a th:href="@{/product/{id}(id=${p.id})}" class="btn-mini">View →</a>
+                </div>
+            </div>
+        </article>
+    </section>
+</main>
+
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+<script th:src="@{/js/app.js}"></script>
+</body>
+</html>

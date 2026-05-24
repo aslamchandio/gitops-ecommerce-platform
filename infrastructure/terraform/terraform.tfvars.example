@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+
+# Everything else has a sensible default in variables.tf — uncomment to override.
+# cluster_name              = "ecom-standard"
+# artifact_repo             = "ecom-microservices"
+# master_authorized_networks = ["YOUR.PUBLIC.IP/32"]
+# db_tier                   = "db-f1-micro"
+# redis_memory_gb           = 1

@@ -1,0 +1,44 @@
+# Env
+.env
+*.local
+
+# Java
+target/
+*.class
+.gradle/
+build/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Go
+*.exe
+*.test
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!terraform.tfvars.example
+# Plan files contain rendered values including sensitive ones — never commit
+tfplan
+*.tfplan
+
+# Generated images (regenerate with script)
+ui-service/src/main/resources/static/images/products/*.png
+
+# Terraform-rendered K8s manifest (contains project-specific IPs, IDs)
+# Re-created on every `terraform apply` from secrets.tf
+k8s/generated-config.yaml
+
+# OS
+.DS_Store
+Thumbs.db

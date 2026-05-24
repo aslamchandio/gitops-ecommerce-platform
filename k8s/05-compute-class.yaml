@@ -1,0 +1,37 @@
+# ComputeClass tells GKE Node Auto-Provisioning what kind of nodes to create
+# when a pod that selects this class is unschedulable.
+#
+# Priority list is tried top-down:
+#   1. Spot e2 nodes  (cheapest — ~70% discount, evictable with 25s notice)
+#   2. Spot n2 nodes  (fallback if e2 spot is exhausted)
+#   3. On-demand e2  (last resort — guarantees pods schedule)
+#
+# Pods opt in by setting:
+#   nodeSelector:
+#     cloud.google.com/compute-class: ecom-spot
+#   tolerations:
+#     - key: cloud.google.com/gke-spot
+#       operator: Equal
+#       value: "true"
+#       effect: NoSchedule
+apiVersion: cloud.google.com/v1
+kind: ComputeClass
+metadata:
+  name: ecom-spot
+spec:
+  priorities:
+    - machineFamily: e2
+      spot: true
+    - machineFamily: n2
+      spot: true
+    - machineFamily: e2
+      spot: false  # on-demand fallback
+  nodePoolAutoCreation:
+    enabled: true
+  # If demand outstrips all listed priorities, scale up anyway with whatever
+  # NAP can find (rather than leaving the pod pending).
+  whenUnsatisfiable: ScaleUpAnyway
+  # Periodically rebalance pods back to higher-priority nodes when capacity
+  # returns (e.g. move from on-demand back to spot).
+  activeMigration:
+    optimizeRulePriority: true

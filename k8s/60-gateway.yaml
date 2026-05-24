@@ -1,0 +1,90 @@
+# Public entry point via Kubernetes Gateway API.
+#
+# `gke-l7-global-external-managed` provisions a global external HTTP(S)
+# load balancer (Premium Tier). For regional/cheaper, swap to
+# `gke-l7-regional-external-managed` and add a proxy-only subnet.
+#
+# For TLS, see the commented `tls:` block on the listener below — uncomment
+# and reference a Kubernetes Secret of type kubernetes.io/tls, OR use
+# Certificate Manager via `networking.gke.io/certmap` annotation on the Gateway.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ecom-gateway
+  namespace: ecom
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  # Pin to a reserved global IP. Create it first:
+  #   gcloud compute addresses create ecom-ip --global
+  # The Ingress-era `networking.gke.io/load-balancer-ip-addresses` annotation
+  # is NOT honoured by the Gateway controller — use spec.addresses instead.
+  addresses:
+    - type: NamedAddress
+      value: ecom-ip
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+    # ----- HTTPS (uncomment after creating tls secret or cert map) -----
+    # - name: https
+    #   protocol: HTTPS
+    #   port: 443
+    #   tls:
+    #     mode: Terminate
+    #     certificateRefs:
+    #       - kind: Secret
+    #         name: ecom-tls
+    #   allowedRoutes:
+    #     namespaces:
+    #       from: Same
+
+---
+# Routes traffic on any host/path to the ui-service backend.
+# Add more rules below (e.g. /api/* → an api-gateway service) as the app grows.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ui-route
+  namespace: ecom
+spec:
+  parentRefs:
+    - name: ecom-gateway
+  # Replace with your real domain (e.g. "nova.example.com").
+  # Leave empty to match any hostname (useful before DNS is set up).
+  hostnames: []
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: ui-service
+          port: 80
+
+---
+# Tell the Google Cloud Load Balancer to health-check the Spring Boot
+# actuator endpoint instead of GET / (which can be slow or return non-200
+# during warm-up). HealthCheckPolicy is a GKE Gateway extension.
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: ui-service-hc
+  namespace: ecom
+spec:
+  default:
+    config:
+      type: HTTP
+      httpHealthCheck:
+        port: 8080
+        requestPath: /actuator/health/readiness
+    checkIntervalSec: 15
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 3
+  targetRef:
+    group: ""
+    kind: Service
+    name: ui-service

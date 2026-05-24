@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-service
+  namespace: ecom
+  labels: { app: catalog-service }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: catalog-service }
+  template:
+    metadata:
+      labels: { app: catalog-service }
+    spec:
+      nodeSelector:
+        cloud.google.com/compute-class: ecom-spot
+      tolerations:
+        - key: cloud.google.com/gke-spot
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 25  # Spot eviction notice window
+      serviceAccountName: ecom-workload
+      # Mounting the SecretProviderClass volume is what triggers the CSI
+      # driver to fetch the GSM secret and sync it into the K8s Secret.
+      # Pods never read from /var/secrets — they pull the password from the
+      # synced K8s Secret via env vars below.
+      volumes:
+        - name: gsm
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ecom-db-password
+      containers:
+        - name: catalog
+          image: IMAGE_CATALOG  # replaced by scripts/deploy.sh
+          ports:
+            - containerPort: 8081
+          volumeMounts:
+            - name: gsm
+              mountPath: /var/secrets
+              readOnly: true
+          env:
+            - name: DB_HOST
+              valueFrom: { configMapKeyRef: { name: ecom-db-config, key: DB_HOST } }
+            - name: DB_USER
+              valueFrom: { configMapKeyRef: { name: ecom-db-config, key: DB_USER } }
+            - name: DB_PORT
+              valueFrom: { configMapKeyRef: { name: ecom-db-config, key: DB_PORT } }
+            - name: DB_NAME
+              valueFrom: { configMapKeyRef: { name: ecom-db-config, key: DB_NAME_CATALOG } }
+            # Password read from /var/secrets/db-password (Secret Manager CSI mount).
+            - name: DB_PASSWORD_FILE
+              value: /var/secrets/db-password
+            - name: FAKESTORE_URL
+              value: "https://fakestoreapi.com/products"
+            - name: SYNC_INTERVAL_HOURS
+              value: "6"
+            - name: PORT
+              value: "8081"
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: 8081 }
+            initialDelaySeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8081 }
+            initialDelaySeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-service
+  namespace: ecom
+spec:
+  selector: { app: catalog-service }
+  ports:
+    - port: 8081
+      targetPort: 8081
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalog-service
+  namespace: ecom
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: catalog-service }

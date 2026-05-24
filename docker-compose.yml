@@ -1,0 +1,104 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ecom-postgres
+    environment:
+      POSTGRES_USER: ecom
+      POSTGRES_PASSWORD: ecom_pw
+      POSTGRES_MULTIPLE_DATABASES: catalog,orders
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-multi-db.sh:/docker-entrypoint-initdb.d/init-multi-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecom"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ecom-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  catalog-service:
+    build: ./catalog-service
+    container_name: catalog-service
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ecom
+      DB_PASSWORD: ecom_pw
+      DB_NAME: catalog
+      FAKESTORE_URL: https://fakestoreapi.com/products
+      SYNC_INTERVAL_HOURS: "6"
+      PORT: "8081"
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  cart-service:
+    build: ./cart-service
+    container_name: cart-service
+    environment:
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SERVER_PORT: 8082
+      CATALOG_SERVICE_URL: http://catalog-service:8081
+    ports:
+      - "8082:8082"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  checkout-service:
+    build: ./checkout-service
+    container_name: checkout-service
+    environment:
+      PORT: 8083
+      CART_SERVICE_URL: http://cart-service:8082
+      ORDER_SERVICE_URL: http://order-service:8084
+    ports:
+      - "8083:8083"
+    depends_on:
+      - cart-service
+      - order-service
+
+  order-service:
+    build: ./order-service
+    container_name: order-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/orders
+      SPRING_DATASOURCE_USERNAME: ecom
+      SPRING_DATASOURCE_PASSWORD: ecom_pw
+      SERVER_PORT: 8084
+    ports:
+      - "8084:8084"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ui-service:
+    build: ./ui-service
+    container_name: ui-service
+    environment:
+      SERVER_PORT: 8080
+      CATALOG_SERVICE_URL: http://catalog-service:8081
+      CART_SERVICE_URL: http://cart-service:8082
+      CHECKOUT_SERVICE_URL: http://checkout-service:8083
+    ports:
+      - "8080:8080"
+    depends_on:
+      - catalog-service
+      - cart-service
+      - checkout-service
+
+volumes:
+  postgres_data:
