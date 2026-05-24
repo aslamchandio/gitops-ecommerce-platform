@@ -1,23 +1,29 @@
 # Public entry point via Kubernetes Gateway API.
 #
 # `gke-l7-global-external-managed` provisions a global external HTTP(S)
-# load balancer (Premium Tier). For regional/cheaper, swap to
-# `gke-l7-regional-external-managed` and add a proxy-only subnet.
+# load balancer (Premium Tier). TLS termination uses a Google Cloud
+# Certificate Manager certificate, referenced via a CertificateMap.
 #
-# For TLS, see the commented `tls:` block on the listener below — uncomment
-# and reference a Kubernetes Secret of type kubernetes.io/tls, OR use
-# Certificate Manager via `networking.gke.io/certmap` annotation on the Gateway.
+# Listeners:
+#   - http  (port 80)  → only accepts the redirect HTTPRoute below
+#   - https (port 443) → real traffic; cert from `ecom-certmap` (annotation)
+#
+# Routes:
+#   - ui-route          : shop.nativeops.site over HTTPS → ui-service
+#   - http-to-https     : any HTTP request → 301 to https://shop.nativeops.site
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: ecom-gateway
   namespace: ecom
+  annotations:
+    # The CertificateMap ecom-certmap (managed by terraform in cert_map.tf)
+    # binds shop.nativeops.site → my-certificate. The Gateway controller
+    # looks up the map by name and wires the cert into the LB target proxy.
+    networking.gke.io/certmap: ecom-certmap
 spec:
   gatewayClassName: gke-l7-global-external-managed
-  # Pin to a reserved global IP. Create it first:
-  #   gcloud compute addresses create ecom-ip --global
-  # The Ingress-era `networking.gke.io/load-balancer-ip-addresses` annotation
-  # is NOT honoured by the Gateway controller — use spec.addresses instead.
+  # Pin to a reserved global IP. Managed by terraform in gateway_ip.tf.
   addresses:
     - type: NamedAddress
       value: ecom-ip
@@ -28,37 +34,33 @@ spec:
       allowedRoutes:
         namespaces:
           from: Same
-    # ----- HTTPS (uncomment after creating tls secret or cert map) -----
-    # - name: https
-    #   protocol: HTTPS
-    #   port: 443
-    #   tls:
-    #     mode: Terminate
-    #     certificateRefs:
-    #       - kind: Secret
-    #         name: ecom-tls
-    #   allowedRoutes:
-    #     namespaces:
-    #       from: Same
+    - name: https
+      protocol: HTTPS
+      port: 443
+      # tls.mode and tls.certificateRefs are NOT needed when certmap
+      # annotation is set — the GKE controller resolves certificates
+      # through the map instead of the Gateway spec.
+      tls:
+        mode: Terminate
+      allowedRoutes:
+        namespaces:
+          from: Same
 
 ---
-# Routes traffic on any host/path to the ui-service backend.
-# Add more rules below (e.g. /api/* → an api-gateway service) as the app grows.
+# Real user traffic: HTTPS on shop.nativeops.site → ui-service:80
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: ui-route
   namespace: ecom
 spec:
-  # Fully-qualified parentRefs/backendRefs so GitOps drift checks match what
-  # the K8s API returns (the API server defaults group/kind/weight on read).
   parentRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway
       name: ecom-gateway
-  # Replace with your real domain (e.g. "nova.example.com").
-  # Leave empty to match any hostname (useful before DNS is set up).
-  hostnames: []
+      sectionName: https    # only binds to the HTTPS listener
+  hostnames:
+    - shop.nativeops.site
   rules:
     - matches:
         - path:
@@ -70,6 +72,27 @@ spec:
           name: ui-service
           port: 80
           weight: 1
+
+---
+# Redirect everything else (HTTP on port 80) to HTTPS. Browsers + curl
+# follow 301s, so the user's experience is "always HTTPS".
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-to-https
+  namespace: ecom
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ecom-gateway
+      sectionName: http     # only binds to the HTTP listener
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
 
 ---
 # Tell the Google Cloud Load Balancer to health-check the Spring Boot
