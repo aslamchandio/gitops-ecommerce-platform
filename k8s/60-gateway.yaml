@@ -50,8 +50,12 @@ metadata:
   name: ui-route
   namespace: ecom
 spec:
+  # Fully-qualified parentRefs/backendRefs so GitOps drift checks match what
+  # the K8s API returns (the API server defaults group/kind/weight on read).
   parentRefs:
-    - name: ecom-gateway
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ecom-gateway
   # Replace with your real domain (e.g. "nova.example.com").
   # Leave empty to match any hostname (useful before DNS is set up).
   hostnames: []
@@ -61,8 +65,11 @@ spec:
             type: PathPrefix
             value: /
       backendRefs:
-        - name: ui-service
+        - group: ""
+          kind: Service
+          name: ui-service
           port: 80
+          weight: 1
 
 ---
 # Tell the Google Cloud Load Balancer to health-check the Spring Boot
