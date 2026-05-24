@@ -17,10 +17,13 @@ metadata:
   name: ecom-gateway
   namespace: ecom
   annotations:
-    # The CertificateMap ecom-certmap (managed by terraform in cert_map.tf)
-    # binds shop.nativeops.site → my-certificate. The Gateway controller
-    # looks up the map by name and wires the cert into the LB target proxy.
-    networking.gke.io/certmap: ecom-certmap
+    # CertificateMap (managed by terraform in cert_map.tf) named "my-certificate"
+    # binds shop.nativeops.site → the Cert Manager certificate also named
+    # "my-certificate". The Gateway controller looks up the map by this name
+    # and wires the cert into the LB target proxy.
+    # NOTE: this annotation takes a Certificate MAP name, NOT a certificate
+    # name. The map and cert sharing the name is intentional.
+    networking.gke.io/certmap: my-certificate
 spec:
   gatewayClassName: gke-l7-global-external-managed
   # Pin to a reserved global IP. Managed by terraform in gateway_ip.tf.
@@ -37,11 +40,11 @@ spec:
     - name: https
       protocol: HTTPS
       port: 443
-      # tls.mode and tls.certificateRefs are NOT needed when certmap
-      # annotation is set — the GKE controller resolves certificates
-      # through the map instead of the Gateway spec.
-      tls:
-        mode: Terminate
+      # NO `tls:` block on purpose. The GKE Gateway controller resolves the
+      # cert via the `networking.gke.io/certmap` annotation above. Adding a
+      # `tls:` block here triggers the upstream Gateway API CRD validation
+      # rule (`certificateRefs or options required when mode is Terminate`),
+      # which is incompatible with the certmap-only pattern on GKE.
       allowedRoutes:
         namespaces:
           from: Same
