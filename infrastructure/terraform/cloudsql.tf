@@ -25,6 +25,17 @@ resource "google_sql_database_instance" "postgres" {
       enabled    = true
       start_time = var.db_backup_start_time
     }
+
+    # max_connections raised from the db-f1-micro default (~25) to 75 so
+    # 2 replicas × HikariCP-of-5 across catalog + order leaves headroom for
+    # idle connections, the migrate step, k8s probes, and Cloud SQL's own
+    # superuser reservation. 75 × ~10MB = ~750MB which fits in the f1-micro
+    # 0.6GB instance because Cloud SQL accounts for actual usage, not peak;
+    # in practice we burn well under that.
+    database_flags {
+      name  = "max_connections"
+      value = "75"
+    }
   }
 
   deletion_protection = false

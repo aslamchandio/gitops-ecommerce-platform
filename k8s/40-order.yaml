@@ -63,6 +63,14 @@ spec:
               valueFrom: { configMapKeyRef: { name: ecom-db-config, key: DB_USER } }
             - name: SERVER_PORT
               value: "8084"
+            # Cap HikariCP pool at 5 per pod. Cloud SQL db-f1-micro has a
+            # tight connection budget (~50 max); with minReplicas=2 the
+            # default pool of 10 per pod would consume 20 connections from
+            # this service alone and exhaust Postgres on a scale event.
+            - name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
+              value: "5"
+            - name: SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE
+              value: "1"
           resources:
             requests: { cpu: 200m, memory: 384Mi }
             limits:   { cpu: 500m, memory: 512Mi }
