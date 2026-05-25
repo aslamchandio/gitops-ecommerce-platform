@@ -113,6 +113,35 @@ spec:
 
 ---
 
+## Availability under Spot preemption
+
+Spot VMs can be reclaimed by GCP at any time with ~30s notice. To avoid a "no healthy upstream" outage when that happens, every service uses three layers of redundancy:
+
+| Layer | Where | Effect |
+|---|---|---|
+| **`minReplicas: 2`** | [`70-hpa.yaml`](70-hpa.yaml) | A single pod loss never takes the service to zero |
+| **`topologySpreadConstraints` (hostname + zone)** | each `10..50-*.yaml` | The 2 replicas can't both land on the same Spot node — `whenUnsatisfiable: ScheduleAnyway` keeps it a soft constraint so pods still schedule if only one node exists |
+| **`PodDisruptionBudget` `maxUnavailable: 1`** | [`80-pdb.yaml`](80-pdb.yaml) | Caps voluntary disruption (drains, cluster upgrades) to 1 pod at a time |
+
+**Split of duties between PDB and topology spread:**
+
+| Type of disruption | Mitigated by |
+|---|---|
+| Voluntary (node drain, cluster upgrade, `kubectl evict`) | PDB |
+| Involuntary (Spot preemption, kernel panic, OOM kill) | topology spread + `minReplicas: 2` |
+
+PDBs are **not consulted** during Spot preemption — they only constrain k8s-initiated evictions. Topology spread covers the involuntary case.
+
+### Connection-pool fan-out when scaling
+
+Bumping `minReplicas` doubles connection demand on shared backends (Cloud SQL, Redis). The `order-service` Spring Boot HikariCP pool is capped at 5 per pod via `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` in [`40-order.yaml`](40-order.yaml), and Cloud SQL `max_connections` was raised to 75 in [`cloudsql.tf`](../infrastructure/terraform/cloudsql.tf). If you raise `minReplicas` further, recheck the math:
+
+```
+total_db_connections ≈ (replicas × HikariCP pool) + catalog_pool + probes + sidecars
+```
+
+---
+
 ## How to add a new service
 
 1. Create `services/<svc>/Dockerfile` and source.

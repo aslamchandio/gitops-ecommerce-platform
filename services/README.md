@@ -38,6 +38,7 @@ Every service reads its dependencies from environment variables (no hardcoded ho
 | `DB_HOST` / `SPRING_DATASOURCE_URL` | postgres container | Cloud SQL private IP |
 | `SPRING_REDIS_HOST`    | redis container         | Memorystore private IP      |
 | `APP_VERSION`          | `dev` (Dockerfile default) | short git SHA (CI build-arg) |
+| `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE` | unset (HikariCP default = 10) | `5` (capped — see Capacity below) |
 
 K8s injects these via the `Deployment.spec.template.spec.containers[].env` list. See `k8s/10..50-*.yaml` for the production wiring.
 
@@ -118,6 +119,7 @@ See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) for the full pipel
 
 - **Cloud SQL Postgres** for persisted orders. Schema in `OrderRepository` JPA entities.
 - **Order ID** is auto-generated (`IDENTITY`).
+- **HikariCP capped** at 5 connections per pod via `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=5` (see [`k8s/40-order.yaml`](../k8s/40-order.yaml)). With `minReplicas=2` the default pool of 10 per pod would consume 20 connections from this service alone and exhaust Cloud SQL on a scale event. See **Capacity planning** below.
 
 ### `ui-service`
 
@@ -126,3 +128,31 @@ See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) for the full pipel
 - **`WebMvcConfig`** sets the cache headers (see above).
 - **Static**: `static/css/styles.css` (~30 KB), `static/js/app.js` (~2 KB) — no build step, no bundler.
 - **Themes**: light + dark via CSS variables + `localStorage`; localhost defaults to dark for distinct local feel.
+
+---
+
+## Capacity planning
+
+The two services that connect to Cloud SQL Postgres (`catalog-service` Go pool, `order-service` HikariCP) share a `db-f1-micro` instance with `max_connections=75` (raised from the f1-micro default of ~25 via [`cloudsql.tf`](../infrastructure/terraform/cloudsql.tf)).
+
+**Current budget at `minReplicas=2`:**
+
+| Source | Per pod | Pods | Total |
+|---|---|---|---|
+| `order-service` HikariCP (capped) | 5 | 2 | 10 |
+| `catalog-service` Go `sql.DB` pool | ~5 | 2 | ~10 |
+| K8s readiness/liveness probes, ArgoCD checks | — | — | ~5 |
+| Cloud SQL superuser reservation | — | — | 3 |
+| **Total demand** | | | **~28** |
+| **Ceiling (max_connections)** | | | **75** |
+| **Headroom** | | | **~47** |
+
+**If you scale further** — bumping `minReplicas` to 3+ or adding a new Postgres-using service — recompute this. The default HikariCP pool of 10 per pod is the fan-out trap. Pattern to follow:
+
+```yaml
+# in the Deployment env block
+- name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
+  value: "5"
+- name: SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE
+  value: "1"
+```

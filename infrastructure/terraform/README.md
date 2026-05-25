@@ -10,7 +10,7 @@ Provisions every piece of GCP infrastructure the project depends on: network, GK
 |------------------|--------------------------------------------------------------------------------------------|---------------------------------------------------|
 | Network          | VPC + subnet + Cloud NAT + private services access (private IPs for SQL/Redis)              | [`network.tf`](network.tf)                        |
 | Compute          | GKE Standard regional cluster (3 zones) · minimal system pool · Node Auto-Provisioning · Gateway API enabled | [`gke.tf`](gke.tf)                                |
-| Data             | Cloud SQL Postgres (private) · Memorystore Redis (basic, private)                          | [`cloudsql.tf`](cloudsql.tf), [`redis.tf`](redis.tf) |
+| Data             | Cloud SQL Postgres (private, `max_connections=75` via `database_flags`) · Memorystore Redis (basic, private) | [`cloudsql.tf`](cloudsql.tf), [`redis.tf`](redis.tf) |
 | Secrets          | Generated DB password (random_password) · GSM secret entry · K8s Secret + ConfigMap        | [`secrets.tf`](secrets.tf), [`secret_manager.tf`](secret_manager.tf) |
 | Image registry   | Artifact Registry repo `ecom-microservices` with cleanup policy                            | [`artifact_registry.tf`](artifact_registry.tf)    |
 | Ingress IP       | Reserved global external address pinned by the Gateway                                     | [`gateway_ip.tf`](gateway_ip.tf)                  |
@@ -163,6 +163,18 @@ Bump `argocd_chart_version` in `terraform.tfvars` and `terraform apply`. The Hel
 ### Rotate the DB password
 
 Tainting the `random_password.db_password` resource regenerates it and rewrites `k8s/generated-config.yaml` (which is gitignored — Terraform owns it). Pods restart to pick it up via the workload-identity-mounted secret.
+
+### Raise Cloud SQL connection ceiling
+
+Edit the `database_flags { name = "max_connections" }` block in [`cloudsql.tf`](cloudsql.tf) and `terraform apply -target=google_sql_database_instance.postgres`. Causes a one-time Cloud SQL restart (~30s) — minimal downtime because of `minReplicas=2` + HikariCP's `fail-fast` retry on the next request.
+
+**When to raise it:** if you bump `minReplicas` on `order-service` or `catalog-service` beyond 2, or add a new Postgres-using service. The current value (75) fits ~2-3 replicas of each Spring Boot service at HikariCP=5. Rough formula:
+
+```
+needed_max ≈ Σ(svc.replicas × svc.hikari_pool) + go_pool + probes(~5) + reservation(~3)
+```
+
+For db-f1-micro (0.6GB RAM), don't exceed ~100 — connections consume memory and the instance will start swapping.
 
 ### Destroy everything
 
