@@ -32,7 +32,7 @@ spec:
             matchLabels: { app: ui-service }
       containers:
         - name: ui
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/ui-service:v2
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/ui-service:v1
           ports:
             - containerPort: 8080
           env:
