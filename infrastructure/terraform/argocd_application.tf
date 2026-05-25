@@ -100,7 +100,10 @@ resource "kubernetes_manifest" "ecom_application" {
           "CreateNamespace=true",       # ArgoCD creates the ecom ns if missing
           "PrunePropagationPolicy=foreground",
           "PruneLast=true",             # delete leaf resources first
-          "ApplyOutOfSyncOnly=true",    # speeds up syncs by skipping unchanged
+          # ApplyOutOfSyncOnly removed: its diff cache went stale on a v2->v1
+          # image bump, causing ArgoCD to report Synced without re-applying
+          # Deployments. The few extra seconds per sync are worth the
+          # correctness guarantee.
           "ServerSideApply=true",       # avoids diffs against the legacy
                                         # kubectl.kubernetes.io/last-applied-configuration
                                         # annotation on pre-ArgoCD resources

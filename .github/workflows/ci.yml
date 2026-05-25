@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve release tag
+      - name: Resolve release tag + short SHA
         id: tag
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -50,6 +50,10 @@ jobs:
           else
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
+          # Short SHA (first 7 chars) is what manifests pin to — immutable,
+          # always changes per commit, so ArgoCD's diff can never silently
+          # miss an image bump.
+          echo "sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP (Workload Identity Federation)
         uses: google-github-actions/auth@v2
@@ -71,8 +75,13 @@ jobs:
         with:
           context: ./services/${{ matrix.svc }}
           push: true
+          # Three tags per image:
+          #   - vN: human-readable release marker (browsable in the registry)
+          #   - <sha>: immutable digest-equivalent, used by k8s manifests
+          #   - latest: convenience for ad-hoc pulls; never referenced by k8s
           tags: |
             ${{ env.REGISTRY }}/${{ matrix.svc }}:${{ steps.tag.outputs.value }}
+            ${{ env.REGISTRY }}/${{ matrix.svc }}:${{ steps.tag.outputs.sha }}
             ${{ env.REGISTRY }}/${{ matrix.svc }}:latest
           cache-from: type=gha,scope=${{ matrix.svc }}
           cache-to:   type=gha,scope=${{ matrix.svc }},mode=max
@@ -89,7 +98,7 @@ jobs:
           ref: main                     # commit goes onto main, not the tag commit
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve release tag
+      - name: Resolve release tag + short SHA
         id: tag
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
@@ -97,10 +106,14 @@ jobs:
           else
             echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
+          # We pin manifests to the SHA of the *tagged* commit, not main's
+          # HEAD (which may have advanced). github.sha here is the commit
+          # that the v* tag points at.
+          echo "sha=$(echo "${{ github.sha }}" | cut -c1-7)" >> "$GITHUB_OUTPUT"
 
-      - name: Rewrite image tags in k8s/*.yaml
+      - name: Rewrite image tags in k8s/*.yaml to short SHA
         env:
-          TAG: ${{ steps.tag.outputs.value }}
+          SHA: ${{ steps.tag.outputs.sha }}
         run: |
           set -euo pipefail
           for svc in catalog-service cart-service checkout-service order-service ui-service; do
@@ -110,18 +123,18 @@ jobs:
               echo "WARN: no manifest references ${svc} — skipping"
               continue
             fi
-            sed -i -E "s|(image:[[:space:]]+${REGISTRY}/${svc}):[^[:space:]]+|\1:${TAG}|" "$file"
-            echo "▶ ${file}: ${svc} -> ${TAG}"
+            sed -i -E "s|(image:[[:space:]]+${REGISTRY}/${svc}):[^[:space:]]+|\1:${SHA}|" "$file"
+            echo "▶ ${file}: ${svc} -> ${SHA}"
           done
 
       - name: Commit & push to main
         run: |
           if git diff --quiet -- k8s/; then
-            echo "Manifests already pinned to ${{ steps.tag.outputs.value }} — nothing to commit."
+            echo "Manifests already pinned to ${{ steps.tag.outputs.sha }} — nothing to commit."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add k8s/
-          git commit -m "ci: bump image tags to ${{ steps.tag.outputs.value }}"
+          git commit -m "ci: bump image refs to ${{ steps.tag.outputs.value }} (${{ steps.tag.outputs.sha }})"
           git push origin main
