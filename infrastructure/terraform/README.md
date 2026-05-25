@@ -1,83 +1,194 @@
-# Infrastructure (GCP)
+# Infrastructure — Terraform (GCP)
 
-Provisions everything needed to run the storefront on GCP:
+Provisions every piece of GCP infrastructure the project depends on: network, GKE cluster, data plane, image registry, TLS, ArgoCD, and the keyless CI identity. After `terraform apply`, the only manual step is pasting two outputs into GitHub Actions secrets — everything else is GitOps from there.
 
-- **GKE Standard** regional cluster (control plane in 3 zones)
-  - Default node pool removed
-  - Minimal **`system-pool`** (1× `e2-small`/zone) for kube-system + DaemonSets
-  - **Node Auto-Provisioning** enabled — workload nodes are created on demand and scale to zero
-  - **Gateway API** controller enabled (`CHANNEL_STANDARD`)
-- **Artifact Registry** repository for service images
-- **Cloud SQL** Postgres (private IP) with `catalog` and `orders` databases
-- **Memorystore Redis** (basic tier) on the VPC
-- **VPC + subnet + private services access** — SQL/Redis are not internet-exposed
-- A dedicated **GKE node service account** with least-privilege IAM (logging, monitoring, AR pull)
-- Generated **`k8s/generated-secrets.yaml`** with DB/Redis connection strings
+---
 
-App workload nodes are created via a **`ComputeClass`** ([`k8s/05-compute-class.yaml`](../../k8s/05-compute-class.yaml)) that prefers **Spot VMs** (~70% cheaper) with on-demand fallback. Workloads opt in with:
+## What this provisions
 
-```yaml
-nodeSelector:
-  cloud.google.com/compute-class: ecom-spot
-tolerations:
-  - key: cloud.google.com/gke-spot
-    operator: Equal
-    value: "true"
-    effect: NoSchedule
-```
+| Layer            | Resources                                                                                 | File                                              |
+|------------------|--------------------------------------------------------------------------------------------|---------------------------------------------------|
+| Network          | VPC + subnet + Cloud NAT + private services access (private IPs for SQL/Redis)              | [`network.tf`](network.tf)                        |
+| Compute          | GKE Standard regional cluster (3 zones) · minimal system pool · Node Auto-Provisioning · Gateway API enabled | [`gke.tf`](gke.tf)                                |
+| Data             | Cloud SQL Postgres (private) · Memorystore Redis (basic, private)                          | [`cloudsql.tf`](cloudsql.tf), [`redis.tf`](redis.tf) |
+| Secrets          | Generated DB password (random_password) · GSM secret entry · K8s Secret + ConfigMap        | [`secrets.tf`](secrets.tf), [`secret_manager.tf`](secret_manager.tf) |
+| Image registry   | Artifact Registry repo `ecom-microservices` with cleanup policy                            | [`artifact_registry.tf`](artifact_registry.tf)    |
+| Ingress IP       | Reserved global external address pinned by the Gateway                                     | [`gateway_ip.tf`](gateway_ip.tf)                  |
+| TLS              | Cert Manager certificate + CertificateMap + MapEntry binding `domain` → cert               | [`cert_map.tf`](cert_map.tf)                      |
+| IAM              | GKE node SA (least-privilege) · workload SA bound via Workload Identity to read GSM secrets | [`iam.tf`](iam.tf)                                |
+| GitOps           | ArgoCD via Helm chart `9.5.15` (ArgoCD v3.4.2) · `ecom` Application with auto-sync         | [`argocd.tf`](argocd.tf), [`argocd_application.tf`](argocd_application.tf) |
+| Keyless CI       | Workload Identity Federation pool + GitHub OIDC provider · SA scoped to AR writer only     | [`github_oidc.tf`](github_oidc.tf)                |
+| API enablement   | All required GCP APIs enabled before dependents are created                                | [`apis.tf`](apis.tf)                              |
 
-Public traffic enters through a **Gateway** + **HTTPRoute** ([`k8s/60-gateway.yaml`](../../k8s/60-gateway.yaml)) using the GA `gke-l7-global-external-managed` GatewayClass — no Ingress resources.
+---
 
-## Cost notes (single-region, idle traffic)
+## First-time deploy
 
-| Resource                          | ~Monthly USD |
-|-----------------------------------|--------------|
-| GKE Standard cluster management   | $74 (free for first cluster per billing account) |
-| `system-pool` 3× e2-small         | ~$18 |
-| App pods on Spot e2 (NAP-managed) | ~$5–10 |
-| Cloud SQL `db-f1-micro`           | ~$10 |
-| Memorystore 1 GB Basic            | ~$25 |
-| Global external HTTP LB           | ~$18 |
-| Artifact Registry storage         | <$1 |
-| **Total**                         | **~$75–90** (or ~$150 if cluster fee applies) |
-
-Switching to `gke-l7-regional-external-managed` and one zone saves ~$10–15/mo at the cost of HA.
-
-## Apply
+### 1. Authenticate + configure
 
 ```bash
 gcloud auth application-default login
-
 cp terraform.tfvars.example terraform.tfvars
-# edit terraform.tfvars with your project_id
+# edit: project_id, domain, github_repo, master_authorized_networks
+```
 
+### 2. Apply
+
+```bash
 terraform init
 terraform apply
 ```
 
-`terraform apply` prints a `kubectl_connect_command`. Run it, then:
+Takes ~15 minutes the first time (GKE cluster + Cloud SQL are the slow ones). The apply will:
+
+- Provision all infra above
+- Install ArgoCD with auto-sync enabled
+- Create the `ecom` Application pointing at this repo's `k8s/` directory
+
+### 3. Wire GitHub Actions to GCP
+
+Two outputs need to land in the repo's GitHub Actions secrets (Settings → Secrets and variables → Actions):
 
 ```bash
-# Reserve the LB IP (referenced by the Gateway annotation)
-gcloud compute addresses create ecom-ip --global
+terraform output github_actions_wif_provider
+#   → paste into GitHub secret  GCP_WIF_PROVIDER
 
-# Build, push, deploy
-../../scripts/build-and-push.sh <PROJECT_ID> <REGION>
-../../scripts/deploy.sh <PROJECT_ID>
-
-# Watch the Gateway provision (takes 3–8 minutes for the LB to come up)
-kubectl -n ecom get gateway ecom-gateway -w
-
-# Then check the LB IP
-gcloud compute addresses describe ecom-ip --global --format='value(address)'
+terraform output github_actions_sa_email
+#   → paste into GitHub secret  GCP_SERVICE_ACCOUNT
 ```
 
-Point your DNS A record at that IP, edit `hostnames:` in the HTTPRoute to match,
-and re-apply.
+The WIF provider is **repo-scoped** — only OIDC tokens from `var.github_repo` (e.g. `aslamchandio/web-app-project`) can mint tokens for the CI service account. The SA's only IAM grant is `roles/artifactregistry.writer` on the `ecom-microservices` repo (no project-wide permissions). If the workflow is ever compromised, blast radius is "can push images to one AR repo".
 
-## Tear down
+### 4. DNS
+
+```bash
+terraform output gateway_ip                # → A record for var.domain
+```
+
+Point your domain's A record at the printed IP. The Gateway is pinned to this reserved IP, so it survives cluster recreations.
+
+### 5. First release
+
+```bash
+git tag v1
+git push origin v1
+```
+
+The CI workflow ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) builds all 5 services in parallel, pushes images to Artifact Registry, rewrites `k8s/*.yaml` to the immutable short-SHA, and commits back to `main`. ArgoCD detects the new revision and rolls out within ~30 seconds. Total `git push` → live: ~3 minutes.
+
+---
+
+## ArgoCD configuration
+
+The `ecom` Application ([`argocd_application.tf`](argocd_application.tf)) is configured for **full GitOps**: auto-sync, prune, self-heal. Two non-obvious bits:
+
+### Why `ApplyOutOfSyncOnly` is **not** in the syncOptions
+
+It was, and a v2 deploy silently reported `Synced` without actually applying the image bump. The stale-diff cache decided the Deployments were already InSync. Removed for correctness — sync takes a few extra seconds, deploys never silently no-op.
+
+### Why ArgoCD chart is pinned to `9.5.15` (not 7.x)
+
+Chart 7.x ships ArgoCD v2.13, which has a schema bug where it can't process Kubernetes 1.32+ Deployment status (specifically `.status.terminatingReplicas`, added in K8s 1.32 Beta). The Server-Side-Diff calculation crashes silently, and ArgoCD reports `Synced` without ever calling `Apply`. Chart 9.5.15 = ArgoCD v3.4.2 has the schema fix.
+
+### `ignoreDifferences`
+
+```hcl
+ignoreDifferences = [
+  { kind = "Service",    jqPathExpressions = [
+      ".metadata.annotations.\"cloud.google.com/neg-status\"",   # controller-written
+      ".metadata.annotations.\"cloud.google.com/neg\"",          # GKE re-serializes JSON
+  ]},
+  { kind = "Deployment", jsonPointers = ["/spec/replicas"] },    # HPA-owned
+]
+```
+
+The `cloud.google.com/neg` entry was added after a permanent OutOfSync flap: GKE rewrites the JSON value to compact form (no spaces), but git had spaces. ArgoCD's string diff caught the whitespace as a difference forever. Ignoring the field lets GKE own the serialized form.
+
+---
+
+## Workload Identity Federation (no JSON keys)
+
+The GitHub OIDC integration (`github_oidc.tf`) is the security-critical piece:
+
+```
+GitHub Actions runs in repo "aslamchandio/web-app-project"
+  → emits short-lived OIDC token with claim "repository=aslamchandio/web-app-project"
+  → presents it to Workload Identity Pool "github-pool"
+  → attribute_condition: assertion.repository == "aslamchandio/web-app-project"  (HARD GATE)
+  → pool issues a short-lived GCP access token impersonating SA "github-actions-ci"
+  → SA has roles/artifactregistry.writer on repo "ecom-microservices" (ONLY)
+```
+
+The attribute condition is non-negotiable: without it, **any** github.com workflow could mint tokens for the SA. With it, only this repo can.
+
+Service account permissions are deliberately minimal — Artifact Registry writer on one repo, nothing else. The workflow can't read other projects, can't touch GKE, can't read secrets. If the CI is ever compromised, the worst-case is rogue images in `ecom-microservices`.
+
+---
+
+## Cost estimate (single region, idle traffic)
+
+| Resource                           | ~Monthly USD                                  |
+|------------------------------------|-----------------------------------------------|
+| GKE Standard cluster management    | $74 (free for first cluster per billing account) |
+| `system-pool` 3× `e2-small`        | ~$18                                          |
+| App pods on Spot e2 (NAP-managed)  | ~$5–10                                        |
+| Cloud SQL `db-f1-micro`            | ~$10                                          |
+| Memorystore 1 GB Basic             | ~$25                                          |
+| Global external HTTP LB            | ~$18                                          |
+| Cloud NAT egress                   | ~$1–5                                         |
+| Artifact Registry storage          | <$1                                           |
+| ArgoCD                             | $0 (runs in cluster)                          |
+| **Total**                          | **~$80–95** (or ~$150 if the cluster mgmt fee applies) |
+
+Switching `gke-l7-global-external-managed` → `gke-l7-regional-external-managed` saves ~$10/mo at the cost of multi-region HA. Going single-zone saves another ~$10 at the cost of zonal HA.
+
+---
+
+## Day-2 ops
+
+### Add or change a Terraform variable
+
+Variables are declared in [`variables.tf`](variables.tf) with **no defaults** — all values live in `terraform.tfvars`. This makes a missing variable a hard fail at `plan` time instead of a silent fallback.
+
+### Upgrade ArgoCD
+
+Bump `argocd_chart_version` in `terraform.tfvars` and `terraform apply`. The Helm release will roll the controller, repo-server, and server pods (~2 min). Existing Applications survive.
+
+### Rotate the DB password
+
+Tainting the `random_password.db_password` resource regenerates it and rewrites `k8s/generated-config.yaml` (which is gitignored — Terraform owns it). Pods restart to pick it up via the workload-identity-mounted secret.
+
+### Destroy everything
 
 ```bash
 terraform destroy
-gcloud compute addresses delete ecom-ip --global --quiet
+```
+
+Cloud SQL takes ~5 minutes to delete. Artifact Registry images are kept by default — delete the repo manually if you want them gone.
+
+---
+
+## File map
+
+```
+infrastructure/terraform/
+├── apis.tf                    GCP API enablement (gate for all dependent resources)
+├── network.tf                 VPC, subnet, Cloud NAT, private services access
+├── gke.tf                     GKE cluster + system pool + NAP + Gateway API
+├── cloudsql.tf                Cloud SQL Postgres + 2 databases
+├── redis.tf                   Memorystore Redis (basic, private)
+├── artifact_registry.tf       AR repo + cleanup policy
+├── gateway_ip.tf              Reserved global LB IP
+├── cert_map.tf                Cert Manager certificate + CertificateMap binding
+├── iam.tf                     GKE node SA + workload SA + WI binding
+├── argocd.tf                  Helm release of argo-cd chart (LB exposed, source-range locked)
+├── argocd_application.tf      The "ecom" Application CR pointing at k8s/
+├── github_oidc.tf             WIF pool + provider + repo-scoped service account
+├── secrets.tf                 Generated DB password + K8s Secret
+├── secret_manager.tf          GSM secret entries (workload-identity readable)
+├── variables.tf               Declarations only (no defaults — fail fast)
+├── outputs.tf                 Cluster name, gateway IP, WIF outputs, etc.
+├── versions.tf                Terraform + provider version pins
+├── terraform.tfvars.example   Template — copy to terraform.tfvars and fill in
+└── terraform.tfvars           Your values (gitignored)
 ```
