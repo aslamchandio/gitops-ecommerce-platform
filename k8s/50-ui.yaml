@@ -62,7 +62,7 @@ metadata:
   annotations:
     # Gateway controller creates a standalone NEG automatically when an HTTPRoute
     # targets this Service. Explicit annotation is harmless and aids debugging.
-    cloud.google.com/neg: '{"exposed_ports": {"80": {"name": "ui-service-neg"}}}'
+    cloud.google.com/neg: '{"exposed_ports":{"80":{"name":"ui-service-neg"}}}'
 spec:
   selector: { app: ui-service }
   ports:
