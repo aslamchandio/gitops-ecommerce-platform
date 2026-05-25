@@ -2,82 +2,84 @@
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
 <head th:replace="~{fragments/layout :: head('Checkout · Nova Store')}"></head>
 <body>
-<div th:replace="~{fragments/layout :: orbs}"></div>
-<nav th:replace="~{fragments/layout :: nav(${cartCount})}"></nav>
+<aside th:replace="~{fragments/layout :: sidebar('checkout')}"></aside>
+<div th:replace="~{fragments/layout :: scrim}"></div>
 
-<main class="checkout-page">
-    <h1 class="page-title">Checkout</h1>
+<div class="app-shell">
+    <header th:replace="~{fragments/layout :: topbar(${cartCount}, 'Checkout')}"></header>
 
-    <div class="checkout-layout">
-        <form class="checkout-form glass" th:action="@{/checkout}" method="post">
-            <h2>Shipping details</h2>
-            <label>Full name <span class="req">*</span>
-                <input name="name" required minlength="2" maxlength="80"
-                       placeholder="e.g. Aslam Chandio">
-            </label>
-            <label>Address <span class="req">*</span>
-                <input name="address" required minlength="4" maxlength="120"
-                       placeholder="Street, apt, etc.">
-            </label>
-            <div class="row-2">
-                <label>City <span class="req">*</span>
-                    <input name="city" required minlength="2" maxlength="60"
-                           placeholder="City">
+    <main class="app-main">
+        <div class="checkout-layout">
+            <form class="checkout-form glass" th:action="@{/checkout}" method="post">
+                <h2>Shipping details</h2>
+                <label>Full name <span class="req">*</span>
+                    <input name="name" required minlength="2" maxlength="80"
+                           placeholder="e.g. Aslam Chandio">
                 </label>
-                <label>Postal code <span class="req">*</span>
-                    <input name="postal" required minlength="3" maxlength="12"
-                           pattern="[A-Za-z0-9\- ]{3,12}"
-                           title="3–12 letters, digits, dashes or spaces"
-                           placeholder="Postal / ZIP">
+                <label>Address <span class="req">*</span>
+                    <input name="address" required minlength="4" maxlength="120"
+                           placeholder="Street, apt, etc.">
                 </label>
-            </div>
-            <label>Country <span class="req">*</span>
-                <select name="country" required>
-                    <option value="" disabled selected>Select your country…</option>
-                    <option value="United States">United States</option>
-                    <option value="Canada">Canada</option>
-                    <option value="United Kingdom">United Kingdom</option>
-                    <option value="Australia">Australia</option>
-                    <option value="Pakistan">Pakistan</option>
-                    <option value="India">India</option>
-                    <option value="United Arab Emirates">United Arab Emirates</option>
-                    <option value="Saudi Arabia">Saudi Arabia</option>
-                    <option value="Germany">Germany</option>
-                    <option value="France">France</option>
-                    <option value="Spain">Spain</option>
-                    <option value="Italy">Italy</option>
-                    <option value="Netherlands">Netherlands</option>
-                    <option value="Sweden">Sweden</option>
-                    <option value="Singapore">Singapore</option>
-                    <option value="Japan">Japan</option>
-                    <option value="South Korea">South Korea</option>
-                    <option value="China">China</option>
-                    <option value="Brazil">Brazil</option>
-                    <option value="Mexico">Mexico</option>
-                    <option value="South Africa">South Africa</option>
-                    <option value="New Zealand">New Zealand</option>
-                </select>
-            </label>
-            <button type="submit" class="btn-primary btn-block">Place Order</button>
-        </form>
+                <div class="row-2">
+                    <label>City <span class="req">*</span>
+                        <input name="city" required minlength="2" maxlength="60"
+                               placeholder="City">
+                    </label>
+                    <label>Postal code <span class="req">*</span>
+                        <input name="postal" required minlength="3" maxlength="12"
+                               pattern="[A-Za-z0-9\- ]{3,12}"
+                               title="3–12 letters, digits, dashes or spaces"
+                               placeholder="Postal / ZIP">
+                    </label>
+                </div>
+                <label>Country <span class="req">*</span>
+                    <select name="country" required>
+                        <option value="" disabled selected>Select your country…</option>
+                        <option value="United States">United States</option>
+                        <option value="Canada">Canada</option>
+                        <option value="United Kingdom">United Kingdom</option>
+                        <option value="Australia">Australia</option>
+                        <option value="Pakistan">Pakistan</option>
+                        <option value="India">India</option>
+                        <option value="United Arab Emirates">United Arab Emirates</option>
+                        <option value="Saudi Arabia">Saudi Arabia</option>
+                        <option value="Germany">Germany</option>
+                        <option value="France">France</option>
+                        <option value="Spain">Spain</option>
+                        <option value="Italy">Italy</option>
+                        <option value="Netherlands">Netherlands</option>
+                        <option value="Sweden">Sweden</option>
+                        <option value="Singapore">Singapore</option>
+                        <option value="Japan">Japan</option>
+                        <option value="South Korea">South Korea</option>
+                        <option value="China">China</option>
+                        <option value="Brazil">Brazil</option>
+                        <option value="Mexico">Mexico</option>
+                        <option value="South Africa">South Africa</option>
+                        <option value="New Zealand">New Zealand</option>
+                    </select>
+                </label>
+                <button type="submit" class="btn-primary btn-block">Place Order</button>
+            </form>
 
-        <aside class="cart-summary">
-            <h2>Order Summary</h2>
-            <ul class="mini-list">
-                <li th:each="i : ${cart.items}">
-                    <span th:text="${i.title}">title</span>
-                    <span th:text="'×' + ${i.quantity}">x1</span>
-                </li>
-            </ul>
-            <hr>
-            <div class="row total"><span>Total</span>
-                <span th:text="'$' + ${#numbers.formatDecimal(cart.total, 1, 2)}">$0.00</span>
-            </div>
-        </aside>
-    </div>
-</main>
+            <aside class="cart-summary glass">
+                <h2>Order Summary</h2>
+                <ul class="mini-list">
+                    <li th:each="i : ${cart.items}">
+                        <span th:text="${i.title}">title</span>
+                        <span th:text="'×' + ${i.quantity}">x1</span>
+                    </li>
+                </ul>
+                <hr>
+                <div class="row total"><span>Total</span>
+                    <span th:text="'$' + ${#numbers.formatDecimal(cart.total, 1, 2)}">$0.00</span></div>
+            </aside>
+        </div>
 
-<footer th:replace="~{fragments/layout :: footer}"></footer>
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </main>
+</div>
+
 <script th:src="@{/js/app.js}"></script>
 </body>
 </html>

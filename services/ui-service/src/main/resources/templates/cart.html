@@ -2,47 +2,53 @@
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
 <head th:replace="~{fragments/layout :: head('Your Cart · Nova Store')}"></head>
 <body>
-<div th:replace="~{fragments/layout :: orbs}"></div>
-<nav th:replace="~{fragments/layout :: nav(${cartCount})}"></nav>
+<aside th:replace="~{fragments/layout :: sidebar('cart')}"></aside>
+<div th:replace="~{fragments/layout :: scrim}"></div>
 
-<main class="cart-page">
-    <h1 class="page-title">Your Cart</h1>
+<div class="app-shell">
+    <header th:replace="~{fragments/layout :: topbar(${cartCount}, 'Your Cart')}"></header>
 
-    <div th:if="${cart.items == null or #lists.isEmpty(cart.items)}" class="empty-state">
-        <div class="empty-illustration">🛒</div>
-        <h2>Your cart is empty</h2>
-        <p>Looks like you haven't added anything yet.</p>
-        <a th:href="@{/}" class="btn-primary">Start Shopping</a>
-    </div>
+    <main class="app-main">
+        <div th:if="${cart.items == null or #lists.isEmpty(cart.items)}" class="empty-state">
+            <div class="empty-illustration">🛒</div>
+            <h2>Your cart is empty</h2>
+            <p>Looks like you haven't added anything yet.</p>
+            <a th:href="@{/}" class="btn-primary">Start Shopping</a>
+        </div>
 
-    <div th:if="${cart.items != null and !#lists.isEmpty(cart.items)}" class="cart-layout">
-        <ul class="cart-items">
-            <li th:each="i : ${cart.items}" class="cart-item">
-                <img th:src="${i.image}" th:alt="${i.title}">
-                <div class="cart-item-info">
-                    <h3 th:text="${i.title}">Title</h3>
-                    <p class="muted">Qty: <span th:text="${i.quantity}">1</span></p>
-                </div>
-                <div class="cart-item-price" th:text="'$' + ${#numbers.formatDecimal(i.price * i.quantity, 1, 2)}">$0.00</div>
-                <form th:action="@{/cart/remove}" method="post">
-                    <input type="hidden" name="productId" th:value="${i.productId}">
-                    <button class="btn-ghost" type="submit" aria-label="Remove">✕</button>
-                </form>
-            </li>
-        </ul>
+        <div th:if="${cart.items != null and !#lists.isEmpty(cart.items)}" class="cart-layout">
+            <ul class="cart-items glass">
+                <li th:each="i : ${cart.items}" class="cart-item">
+                    <img th:src="${i.image}" th:alt="${i.title}">
+                    <div class="cart-item-info">
+                        <h3 th:text="${i.title}">Title</h3>
+                        <p class="muted">Qty: <span th:text="${i.quantity}">1</span></p>
+                    </div>
+                    <div class="cart-item-price"
+                         th:text="'$' + ${#numbers.formatDecimal(i.price * i.quantity, 1, 2)}">$0.00</div>
+                    <form th:action="@{/cart/remove}" method="post">
+                        <input type="hidden" name="productId" th:value="${i.productId}">
+                        <button class="btn-ghost" type="submit" aria-label="Remove">✕</button>
+                    </form>
+                </li>
+            </ul>
 
-        <aside class="cart-summary">
-            <h2>Order Summary</h2>
-            <div class="row"><span>Subtotal</span><span th:text="'$' + ${#numbers.formatDecimal(cart.total, 1, 2)}">$0.00</span></div>
-            <div class="row"><span>Shipping</span><span class="success">FREE</span></div>
-            <hr>
-            <div class="row total"><span>Total</span><span th:text="'$' + ${#numbers.formatDecimal(cart.total, 1, 2)}">$0.00</span></div>
-            <a th:href="@{/checkout}" class="btn-primary btn-block">Proceed to Checkout →</a>
-        </aside>
-    </div>
-</main>
+            <aside class="cart-summary glass">
+                <h2>Order Summary</h2>
+                <div class="row"><span>Subtotal</span>
+                    <span th:text="'$' + ${#numbers.formatDecimal(cart.total, 1, 2)}">$0.00</span></div>
+                <div class="row"><span>Shipping</span><span class="success">FREE</span></div>
+                <hr>
+                <div class="row total"><span>Total</span>
+                    <span th:text="'$' + ${#numbers.formatDecimal(cart.total, 1, 2)}">$0.00</span></div>
+                <a th:href="@{/checkout}" class="btn-primary btn-block">Proceed to Checkout →</a>
+            </aside>
+        </div>
 
-<footer th:replace="~{fragments/layout :: footer}"></footer>
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </main>
+</div>
+
 <script th:src="@{/js/app.js}"></script>
 </body>
 </html>

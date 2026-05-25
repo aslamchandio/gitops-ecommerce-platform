@@ -69,15 +69,22 @@ resource "kubernetes_manifest" "ecom_application" {
         namespace = var.gitops_app_namespace
       }
 
-      # Annotations + status fields added by controllers (not in git) must be
-      # ignored or ArgoCD will permanently flap trying to remove them while
-      # the controller re-adds them.
+      # Annotations + status fields added/normalized by controllers must be
+      # ignored or ArgoCD will permanently flap trying to overwrite them while
+      # the controller re-applies them.
       ignoreDifferences = [
         {
           group = ""
           kind  = "Service"
           jqPathExpressions = [
+            # Written by the NEG controller — not in git.
             ".metadata.annotations.\"cloud.google.com/neg-status\"",
+            # Authored in git but GKE re-serializes the JSON value to compact
+            # form (no spaces). ArgoCD diffs the string, so any whitespace
+            # difference in git causes permanent OutOfSync flap. Letting GKE
+            # own the serialized form sidesteps the trap regardless of how
+            # the YAML is formatted.
+            ".metadata.annotations.\"cloud.google.com/neg\"",
           ]
         },
         {

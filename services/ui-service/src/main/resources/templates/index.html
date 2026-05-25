@@ -1,145 +1,94 @@
 <!DOCTYPE html>
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
-<head th:replace="~{fragments/layout :: head('Nova Store · Shop the Future')}"></head>
+<head th:replace="~{fragments/layout :: head('Nova Store · Dashboard')}"></head>
 <body>
-<div th:replace="~{fragments/layout :: orbs}"></div>
-<nav th:replace="~{fragments/layout :: nav(${cartCount})}"></nav>
+<aside th:replace="~{fragments/layout :: sidebar('home')}"></aside>
+<div th:replace="~{fragments/layout :: scrim}"></div>
 
-<main>
-    <!-- HERO + DISCOUNT BANNER -->
-    <section class="hero">
-        <div class="hero-banner">
-            <div class="hero-badge">✨ SPRING DROP · NOW LIVE</div>
-            <h1 class="hero-title">
-                Less scrolling.<br>
-                More <span class="gradient-text">finding.</span>
-            </h1>
-            <p class="hero-sub">Hand-picked drops · Up to 40% off · Free express delivery over $50</p>
-            <div class="hero-actions">
-                <a href="#products" class="btn-primary">Shop the Drop →</a>
-                <a href="#categories" class="btn-outline">Browse Categories</a>
+<div class="app-shell">
+    <header th:replace="~{fragments/layout :: topbar(${cartCount}, 'Dashboard')}"></header>
+
+    <main class="app-main">
+        <!-- HERO / WELCOME STRIP -->
+        <section class="welcome">
+            <div class="welcome-text">
+                <span class="welcome-eyebrow">✨ Spring Drop · Live now</span>
+                <h2>Discover this season's <span class="grad">curated picks</span>.</h2>
+                <p>Hand-selected products refreshed daily. Free express shipping on orders over $50.</p>
             </div>
-
-            <div class="hero-stats">
-                <div><strong>10K+</strong><span>Happy Customers</span></div>
-                <div><strong>4.9★</strong><span>Avg Rating</span></div>
-                <div><strong>24h</strong><span>Delivery</span></div>
-            </div>
-        </div>
-
-        <!-- Hero illustration: inline SVG so we ship no extra assets through the docker image -->
-        <div class="hero-art" aria-hidden="true">
-            <svg viewBox="0 0 360 360" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                    <linearGradient id="bagGrad" x1="0" y1="0" x2="1" y2="1">
-                        <stop offset="0%" stop-color="#8b5cf6"/>
-                        <stop offset="100%" stop-color="#06b6d4"/>
-                    </linearGradient>
-                    <linearGradient id="tagGrad" x1="0" y1="0" x2="1" y2="0">
-                        <stop offset="0%" stop-color="#ec4899"/>
-                        <stop offset="100%" stop-color="#8b5cf6"/>
-                    </linearGradient>
-                </defs>
-                <circle cx="180" cy="180" r="150" fill="url(#bagGrad)" opacity="0.15"/>
-                <circle cx="180" cy="180" r="105" fill="url(#bagGrad)" opacity="0.22"/>
-                <!-- Shopping bag -->
-                <path d="M120 140 L240 140 L255 290 Q255 305 240 305 L120 305 Q105 305 105 290 Z"
-                      fill="url(#bagGrad)" opacity="0.9"/>
-                <path d="M145 140 Q145 100 180 100 Q215 100 215 140"
-                      fill="none" stroke="#f4f1ff" stroke-width="6" stroke-linecap="round"/>
-                <!-- Sale tag -->
-                <g transform="translate(220,80) rotate(18)">
-                    <rect x="0" y="0" width="86" height="46" rx="10" fill="url(#tagGrad)"/>
-                    <circle cx="14" cy="23" r="5" fill="#0a0612"/>
-                    <text x="48" y="30" fill="#fff" font-family="Inter, sans-serif"
-                          font-size="18" font-weight="800" text-anchor="middle">-40%</text>
-                </g>
-                <!-- Floating sparkles -->
-                <circle cx="80" cy="90" r="4" fill="#f4f1ff" opacity="0.8"/>
-                <circle cx="300" cy="160" r="3" fill="#06b6d4" opacity="0.9"/>
-                <circle cx="270" cy="290" r="5" fill="#ec4899" opacity="0.8"/>
-                <circle cx="70" cy="240" r="3" fill="#8b5cf6" opacity="0.9"/>
-            </svg>
-        </div>
-    </section>
-
-    <!-- Marquee announcement -->
-    <div class="marquee" aria-hidden="true">
-        <div class="marquee-track">
-            <span>✨ SPRING DROP LIVE</span><span>·</span>
-            <span>🚚 FREE EXPRESS OVER $50</span><span>·</span>
-            <span>💎 NEW WEEKLY ARRIVALS</span><span>·</span>
-            <span>🎁 GIFT CARDS AVAILABLE</span><span>·</span>
-            <span>✨ SPRING DROP LIVE</span><span>·</span>
-            <span>🚚 FREE EXPRESS OVER $50</span><span>·</span>
-            <span>💎 NEW WEEKLY ARRIVALS</span><span>·</span>
-            <span>🎁 GIFT CARDS AVAILABLE</span><span>·</span>
-        </div>
-    </div>
-
-    <!-- SHOP BY CATEGORY (visual tiles, inline SVG illustrations) -->
-    <section class="cats" id="categories" th:if="${categories != null and !categories.isEmpty()}">
-        <header class="cats-head">
-            <h2>Shop by Category</h2>
-            <p>Skip the scroll — jump straight to what you came for.</p>
-        </header>
-        <div class="cats-grid">
-            <a th:each="c, i : ${categories}"
-               th:href="@{/(category=${c})}"
-               class="cat-tile"
-               th:classappend="'cat-tone-' + ${i.index % 4}">
-                <div class="cat-art" aria-hidden="true">
-                    <svg viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg">
-                        <circle cx="40" cy="40" r="34" fill="currentColor" opacity="0.18"/>
-                        <circle cx="40" cy="40" r="22" fill="currentColor" opacity="0.35"/>
-                        <circle cx="40" cy="40" r="10" fill="currentColor"/>
-                    </svg>
+            <div class="welcome-stats">
+                <div class="stat-card">
+                    <span class="stat-label">Products</span>
+                    <span class="stat-value" th:text="${products != null ? #lists.size(products) : 0}">0</span>
                 </div>
-                <span class="cat-name" th:text="${c}">Category</span>
-                <span class="cat-arrow">→</span>
-            </a>
-        </div>
-    </section>
-
-    <!-- CATEGORY FILTER -->
-    <section class="filters" id="products">
-        <a th:href="@{/}" class="filter-pill" th:classappend="${activeCategory == null} ? 'is-active' : ''">All</a>
-        <a th:each="c : ${categories}"
-           th:href="@{/(category=${c})}"
-           th:text="${c}"
-           class="filter-pill"
-           th:classappend="${activeCategory == c} ? 'is-active' : ''">cat</a>
-    </section>
-
-    <!-- PRODUCT GRID -->
-    <section class="grid">
-        <article th:each="p, iter : ${products}"
-                 class="card"
-                 th:style="'animation-delay:' + ${iter.index * 60} + 'ms'">
-            <div class="card-media">
-                <img th:src="${p.image}" th:alt="${p.title}" loading="lazy">
-                <span th:if="${p.discount != null and p.discount > 0}"
-                      class="badge-discount"
-                      th:text="'-' + ${p.discount} + '%'">-20%</span>
-            </div>
-            <div class="card-body">
-                <span class="card-cat" th:text="${p.category}">cat</span>
-                <h3 class="card-title" th:text="${p.title}">Title</h3>
-                <div class="card-rating">
-                    <span th:if="${p.rating != null}" th:text="'★ ' + ${p.rating.rate}">★ 4.5</span>
+                <div class="stat-card">
+                    <span class="stat-label">Categories</span>
+                    <span class="stat-value" th:text="${categories != null ? #lists.size(categories) : 0}">0</span>
                 </div>
-                <div class="card-foot">
-                    <div class="price">
-                        <span class="price-now" th:text="'$' + ${p.price}">$0.00</span>
+                <div class="stat-card highlight">
+                    <span class="stat-label">Avg rating</span>
+                    <span class="stat-value">4.9★</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- CATEGORY CHIPS / FILTERS -->
+        <section class="toolbar" id="categories">
+            <div class="toolbar-left">
+                <span class="toolbar-label">Filter</span>
+                <a th:href="@{/}" class="chip" th:classappend="${activeCategory == null} ? ' is-active' : ''">All</a>
+                <a th:each="c : ${categories}"
+                   th:href="@{/(category=${c})}"
+                   th:text="${c}"
+                   class="chip"
+                   th:classappend="${activeCategory == c} ? ' is-active' : ''">cat</a>
+            </div>
+            <div class="toolbar-right">
+                <span class="result-count">
+                    <strong th:text="${products != null ? #lists.size(products) : 0}">0</strong> results
+                </span>
+            </div>
+        </section>
+
+        <!-- PRODUCT GRID -->
+        <section class="grid" id="products">
+            <article th:each="p, iter : ${products}"
+                     class="card"
+                     th:attr="data-title=${p.title}, data-category=${p.category}"
+                     th:style="'animation-delay:' + ${iter.index * 40} + 'ms'">
+                <a th:href="@{/product/{id}(id=${p.id})}" class="card-link">
+                    <div class="card-media">
+                        <img th:src="${p.image}" th:alt="${p.title}" loading="lazy">
+                        <span th:if="${p.discount != null and p.discount > 0}"
+                              class="badge-discount"
+                              th:text="'-' + ${p.discount} + '%'">-20%</span>
                     </div>
-                    <a th:href="@{/product/{id}(id=${p.id})}" class="btn-mini">View →</a>
-                </div>
-            </div>
-        </article>
-    </section>
-</main>
+                    <div class="card-body">
+                        <span class="card-cat" th:text="${p.category}">cat</span>
+                        <h3 class="card-title" th:text="${p.title}">Title</h3>
+                        <div class="card-rating">
+                            <span th:if="${p.rating != null}">★ <strong th:text="${p.rating.rate}">4.5</strong></span>
+                        </div>
+                        <div class="card-foot">
+                            <span class="price-now" th:text="'$' + ${p.price}">$0.00</span>
+                            <span class="btn-mini">View →</span>
+                        </div>
+                    </div>
+                </a>
+            </article>
+        </section>
 
-<footer th:replace="~{fragments/layout :: footer}"></footer>
+        <!-- EMPTY-SEARCH STATE (toggled by JS) -->
+        <div id="no-results" class="empty-state hidden">
+            <div class="empty-illustration">🔍</div>
+            <h2>No products match your search</h2>
+            <p>Try a different keyword or clear the filter.</p>
+        </div>
+
+        <footer th:replace="~{fragments/layout :: footer}"></footer>
+    </main>
+</div>
+
 <script th:src="@{/js/app.js}"></script>
 </body>
 </html>
