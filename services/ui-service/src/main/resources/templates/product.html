@@ -2,56 +2,49 @@
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
 <head th:replace="~{fragments/layout :: head(${product.title})}"></head>
 <body>
-<aside th:replace="~{fragments/layout :: sidebar('shop')}"></aside>
-<div th:replace="~{fragments/layout :: scrim}"></div>
+<div th:replace="~{fragments/layout :: orbs}"></div>
+<nav th:replace="~{fragments/layout :: nav(${cartCount}, 'home')}"></nav>
 
-<div class="app-shell">
-    <header th:replace="~{fragments/layout :: topbar(${cartCount}, 'Product')}"></header>
+<main class="page pdp-page">
+    <a th:href="@{/}" class="back-link">← Back to shop</a>
 
-    <main class="app-main">
-        <a th:href="@{/}" class="back-link">← Back to dashboard</a>
-
-        <article class="pdp-card">
-            <div class="pdp-grid">
-                <div class="pdp-image">
-                    <img th:src="${product.image}" th:alt="${product.title}">
-                    <span th:if="${product.discount != null and product.discount > 0}"
-                          class="badge-discount badge-large"
-                          th:text="'-' + ${product.discount} + '% OFF'">-20% OFF</span>
-                </div>
-                <div class="pdp-info">
-                    <span class="card-cat" th:text="${product.category}">cat</span>
-                    <h1 th:text="${product.title}">Title</h1>
-                    <div class="pdp-rating" th:if="${product.rating != null}">
-                        <span>★ <strong th:text="${product.rating.rate}">4.5</strong></span>
-                        <span class="muted" th:text="'(' + ${product.rating.count} + ' reviews)'">(120 reviews)</span>
-                    </div>
-                    <p class="pdp-desc" th:text="${product.description}">Description</p>
-                    <div class="pdp-price">
-                        <span class="price-now" th:text="'$' + ${product.price}">$0.00</span>
-                    </div>
-                    <form th:action="@{/cart/add}" method="post" class="pdp-form">
-                        <input type="hidden" name="productId" th:value="${product.id}">
-                        <div class="qty">
-                            <label>Quantity</label>
-                            <input type="number" name="quantity" value="1" min="1" max="10">
-                        </div>
-                        <button type="submit" class="btn-primary btn-block">Add to Cart</button>
-                    </form>
-
-                    <div class="pdp-perks">
-                        <div>🚚 Free shipping over $50</div>
-                        <div>↩ 30-day returns</div>
-                        <div>🔒 Secure checkout</div>
-                    </div>
-                </div>
+    <article class="pdp">
+        <div class="pdp-image">
+            <img th:src="${product.image}" th:alt="${product.title}">
+            <span th:if="${product.discount != null and product.discount > 0}"
+                  class="badge-discount badge-large"
+                  th:text="'-' + ${product.discount} + '% OFF'">-20% OFF</span>
+        </div>
+        <div class="pdp-info">
+            <span class="card-cat" th:text="${product.category}">cat</span>
+            <h1 class="pdp-title" th:text="${product.title}">Title</h1>
+            <div class="pdp-rating" th:if="${product.rating != null}">
+                <span class="stars">★ <strong th:text="${product.rating.rate}">4.5</strong></span>
+                <span class="muted" th:text="'(' + ${product.rating.count} + ' reviews)'">(120 reviews)</span>
             </div>
-        </article>
+            <p class="pdp-desc" th:text="${product.description}">Description</p>
+            <div class="pdp-price">
+                <span class="price-now" th:text="'$' + ${product.price}">$0.00</span>
+            </div>
+            <form th:action="@{/cart/add}" method="post" class="pdp-form">
+                <input type="hidden" name="productId" th:value="${product.id}">
+                <div class="qty">
+                    <label>Quantity</label>
+                    <input type="number" name="quantity" value="1" min="1" max="10">
+                </div>
+                <button type="submit" class="btn-primary btn-block">Add to cart</button>
+            </form>
 
-        <footer th:replace="~{fragments/layout :: footer}"></footer>
-    </main>
-</div>
+            <div class="pdp-perks">
+                <div>🚚 Free express over $50</div>
+                <div>↩ 30-day returns</div>
+                <div>🔒 Secure checkout</div>
+            </div>
+        </div>
+    </article>
+</main>
 
-<script th:src="@{/js/app.js}"></script>
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+<script th:src="@{/js/app.js(v=${appVersion})}"></script>
 </body>
 </html>

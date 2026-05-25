@@ -7,6 +7,11 @@ spring:
   thymeleaf:
     cache: false  # set true in prod via -Dspring.thymeleaf.cache=true
 
+app:
+  # Build SHA (or 'dev' locally). Used as ?v=<sha> on CSS/JS links so a
+  # release invalidates browser caches automatically.
+  version: ${APP_VERSION:dev}
+
 catalog:
   service:
     url: ${CATALOG_SERVICE_URL:http://localhost:8081}

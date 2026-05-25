@@ -1,61 +1,99 @@
 <!DOCTYPE html>
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
-<head th:replace="~{fragments/layout :: head('Nova Store · Dashboard')}"></head>
+<head th:replace="~{fragments/layout :: head('Nova Store · Curated Online Shopping')}"></head>
 <body>
-<aside th:replace="~{fragments/layout :: sidebar('home')}"></aside>
-<div th:replace="~{fragments/layout :: scrim}"></div>
+<div th:replace="~{fragments/layout :: orbs}"></div>
+<nav th:replace="~{fragments/layout :: nav(${cartCount}, 'home')}"></nav>
 
-<div class="app-shell">
-    <header th:replace="~{fragments/layout :: topbar(${cartCount}, 'Dashboard')}"></header>
+<main class="page">
+    <!-- ============ HERO ============ -->
+    <section class="hero">
+        <div class="hero-copy">
+            <span class="hero-eyebrow">
+                <span class="pulse-dot"></span> Spring Drop · Live now
+            </span>
+            <h1 class="hero-title">
+                Find the <span class="title-grad">extraordinary</span><br>in the everyday.
+            </h1>
+            <p class="hero-sub">
+                Hand-picked products, refreshed daily. Up to <strong>40% off</strong> selected lines —
+                free express shipping on orders over $50.
+            </p>
+            <div class="hero-cta">
+                <a href="#products" class="btn-primary">Shop the drop →</a>
+                <a href="#categories" class="btn-outline">Browse categories</a>
+            </div>
+            <div class="hero-trust">
+                <div><strong>10K+</strong><span>Happy customers</span></div>
+                <div><strong>4.9★</strong><span>Avg rating</span></div>
+                <div><strong>24h</strong><span>Express delivery</span></div>
+            </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+            <div class="hero-card hero-card-1">
+                <div class="hc-tag">-40%</div>
+                <div class="hc-orb"></div>
+            </div>
+            <div class="hero-card hero-card-2">
+                <div class="hc-stars">★★★★★</div>
+                <div class="hc-orb"></div>
+            </div>
+            <div class="hero-card hero-card-3">
+                <div class="hc-cart">🛒</div>
+            </div>
+            <div class="hero-glow"></div>
+        </div>
+    </section>
 
-    <main class="app-main">
-        <!-- HERO / WELCOME STRIP -->
-        <section class="welcome">
-            <div class="welcome-text">
-                <span class="welcome-eyebrow">✨ Spring Drop · Live now</span>
-                <h2>Discover this season's <span class="grad">curated picks</span>.</h2>
-                <p>Hand-selected products refreshed daily. Free express shipping on orders over $50.</p>
-            </div>
-            <div class="welcome-stats">
-                <div class="stat-card">
-                    <span class="stat-label">Products</span>
-                    <span class="stat-value" th:text="${products != null ? #lists.size(products) : 0}">0</span>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Categories</span>
-                    <span class="stat-value" th:text="${categories != null ? #lists.size(categories) : 0}">0</span>
-                </div>
-                <div class="stat-card highlight">
-                    <span class="stat-label">Avg rating</span>
-                    <span class="stat-value">4.9★</span>
-                </div>
-            </div>
-        </section>
+    <!-- ============ MARQUEE ============ -->
+    <div class="marquee" aria-hidden="true">
+        <div class="marquee-track">
+            <span>✦ FREE EXPRESS OVER $50</span><span>✦</span>
+            <span>NEW DROPS EVERY WEEK</span><span>✦</span>
+            <span>30-DAY RETURNS</span><span>✦</span>
+            <span>SECURE CHECKOUT</span><span>✦</span>
+            <span>FREE EXPRESS OVER $50</span><span>✦</span>
+            <span>NEW DROPS EVERY WEEK</span><span>✦</span>
+            <span>30-DAY RETURNS</span><span>✦</span>
+            <span>SECURE CHECKOUT</span><span>✦</span>
+        </div>
+    </div>
 
-        <!-- CATEGORY CHIPS / FILTERS -->
-        <section class="toolbar" id="categories">
-            <div class="toolbar-left">
-                <span class="toolbar-label">Filter</span>
-                <a th:href="@{/}" class="chip" th:classappend="${activeCategory == null} ? ' is-active' : ''">All</a>
-                <a th:each="c : ${categories}"
-                   th:href="@{/(category=${c})}"
-                   th:text="${c}"
-                   class="chip"
-                   th:classappend="${activeCategory == c} ? ' is-active' : ''">cat</a>
-            </div>
-            <div class="toolbar-right">
-                <span class="result-count">
-                    <strong th:text="${products != null ? #lists.size(products) : 0}">0</strong> results
-                </span>
-            </div>
-        </section>
+    <!-- ============ CATEGORY CHIPS ============ -->
+    <section class="filters" id="categories">
+        <div class="filters-head">
+            <h2 class="section-title">Shop by category</h2>
+            <p class="section-sub">Skip the scroll — jump straight to what you came for.</p>
+        </div>
+        <div class="chip-row">
+            <a th:href="@{/}" class="chip"
+               th:classappend="${activeCategory == null} ? ' is-active' : ''">All</a>
+            <a th:each="c : ${categories}"
+               th:href="@{/(category=${c})}"
+               th:text="${c}"
+               class="chip"
+               th:classappend="${activeCategory == c} ? ' is-active' : ''">cat</a>
+        </div>
+    </section>
 
-        <!-- PRODUCT GRID -->
-        <section class="grid" id="products">
+    <!-- ============ PRODUCT GRID ============ -->
+    <section class="products" id="products">
+        <div class="products-head">
+            <div>
+                <h2 class="section-title" id="featured">Featured products</h2>
+                <p class="section-sub">
+                    <strong class="result-count" th:text="${products != null ? #lists.size(products) : 0}">0</strong>
+                    items
+                    <span th:if="${activeCategory != null}">in <em th:text="${activeCategory}">cat</em></span>
+                </p>
+            </div>
+        </div>
+
+        <div class="grid">
             <article th:each="p, iter : ${products}"
                      class="card"
                      th:attr="data-title=${p.title}, data-category=${p.category}"
-                     th:style="'animation-delay:' + ${iter.index * 40} + 'ms'">
+                     th:style="'animation-delay:' + ${iter.index * 50} + 'ms'">
                 <a th:href="@{/product/{id}(id=${p.id})}" class="card-link">
                     <div class="card-media">
                         <img th:src="${p.image}" th:alt="${p.title}" loading="lazy">
@@ -66,29 +104,27 @@
                     <div class="card-body">
                         <span class="card-cat" th:text="${p.category}">cat</span>
                         <h3 class="card-title" th:text="${p.title}">Title</h3>
-                        <div class="card-rating">
-                            <span th:if="${p.rating != null}">★ <strong th:text="${p.rating.rate}">4.5</strong></span>
+                        <div class="card-meta">
+                            <span class="card-rating" th:if="${p.rating != null}">
+                                ★ <strong th:text="${p.rating.rate}">4.5</strong>
+                            </span>
+                            <span class="price" th:text="'$' + ${p.price}">$0.00</span>
                         </div>
-                        <div class="card-foot">
-                            <span class="price-now" th:text="'$' + ${p.price}">$0.00</span>
-                            <span class="btn-mini">View →</span>
-                        </div>
+                        <span class="card-cta">Quick view →</span>
                     </div>
                 </a>
             </article>
-        </section>
-
-        <!-- EMPTY-SEARCH STATE (toggled by JS) -->
-        <div id="no-results" class="empty-state hidden">
-            <div class="empty-illustration">🔍</div>
-            <h2>No products match your search</h2>
-            <p>Try a different keyword or clear the filter.</p>
         </div>
 
-        <footer th:replace="~{fragments/layout :: footer}"></footer>
-    </main>
-</div>
+        <div id="no-results" class="empty-state hidden">
+            <div class="empty-illustration">🔍</div>
+            <h3>No products match your search</h3>
+            <p>Try a different keyword or clear the filter.</p>
+        </div>
+    </section>
+</main>
 
-<script th:src="@{/js/app.js}"></script>
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+<script th:src="@{/js/app.js(v=${appVersion})}"></script>
 </body>
 </html>

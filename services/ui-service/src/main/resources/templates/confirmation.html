@@ -2,35 +2,30 @@
 <html lang="en" xmlns:th="http://www.thymeleaf.org">
 <head th:replace="~{fragments/layout :: head('Order Confirmed · Nova Store')}"></head>
 <body>
-<aside th:replace="~{fragments/layout :: sidebar('home')}"></aside>
-<div th:replace="~{fragments/layout :: scrim}"></div>
+<div th:replace="~{fragments/layout :: orbs}"></div>
+<nav th:replace="~{fragments/layout :: nav(${cartCount}, 'home')}"></nav>
 
-<div class="app-shell">
-    <header th:replace="~{fragments/layout :: topbar(${cartCount}, 'Order')}"></header>
-
-    <main class="app-main">
-        <div class="confirm-card glass">
-            <div th:if="${result['error'] == null}">
-                <div class="check-anim">✓</div>
-                <h1>Order placed!</h1>
-                <p>Thanks for shopping with Nova. Your order ID is
-                    <strong th:text="${result['orderId']}">#0</strong>.
-                </p>
-                <p class="muted">Total charged: <strong th:text="'$' + ${result['total']}">$0.00</strong></p>
-                <a th:href="@{/}" class="btn-primary">Continue Shopping</a>
-            </div>
-            <div th:if="${result['error'] != null}">
-                <div class="check-anim error">!</div>
-                <h1>Something went wrong</h1>
-                <p th:text="${result['error']}">error</p>
-                <a th:href="@{/cart}" class="btn-primary">Back to Cart</a>
-            </div>
+<main class="page">
+    <div class="confirm-card glass">
+        <div th:if="${result['error'] == null}">
+            <div class="check-anim">✓</div>
+            <h1>Order placed!</h1>
+            <p>Thanks for shopping with Nova. Your order ID is
+                <strong th:text="${result['orderId']}">#0</strong>.
+            </p>
+            <p class="muted">Total charged: <strong th:text="'$' + ${result['total']}">$0.00</strong></p>
+            <a th:href="@{/}" class="btn-primary">Continue shopping</a>
         </div>
+        <div th:if="${result['error'] != null}">
+            <div class="check-anim error">!</div>
+            <h1>Something went wrong</h1>
+            <p th:text="${result['error']}">error</p>
+            <a th:href="@{/cart}" class="btn-primary">Back to cart</a>
+        </div>
+    </div>
+</main>
 
-        <footer th:replace="~{fragments/layout :: footer}"></footer>
-    </main>
-</div>
-
-<script th:src="@{/js/app.js}"></script>
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+<script th:src="@{/js/app.js(v=${appVersion})}"></script>
 </body>
 </html>

@@ -1,8 +1,8 @@
 /* Nova Store · UI interactions
    - Theme toggle (persists in localStorage)
-   - Sidebar drawer (mobile)
+   - Mobile nav burger toggle
    - Client-side product search (filters cards by title/category)
-   - Keyboard "/" to focus search
+   - "/" focuses the search input
 */
 (() => {
   const root = document.documentElement;
@@ -17,40 +17,21 @@
     });
   }
 
-  // ---------- Sidebar drawer (mobile) ----------
-  const sidebar = document.getElementById('sidebar');
-  const scrim = document.querySelector('.sidebar-scrim');
-  const openSidebar = () => {
-    if (!sidebar) return;
-    sidebar.classList.add('is-open');
-    if (scrim) scrim.classList.add('is-open');
-    document.body.style.overflow = 'hidden';
-  };
-  const closeSidebar = () => {
-    if (!sidebar) return;
-    sidebar.classList.remove('is-open');
-    if (scrim) scrim.classList.remove('is-open');
-    document.body.style.overflow = '';
-  };
-  document.querySelectorAll('[data-sidebar-open]').forEach(el =>
-    el.addEventListener('click', openSidebar));
-  document.querySelectorAll('[data-sidebar-close]').forEach(el =>
-    el.addEventListener('click', closeSidebar));
-  // Close drawer when navigating
-  document.querySelectorAll('.sidebar .side-link').forEach(el =>
-    el.addEventListener('click', () => {
-      if (window.innerWidth <= 768) closeSidebar();
-    }));
-  // Escape closes drawer
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeSidebar();
-  });
+  // ---------- Mobile nav burger ----------
+  const burger = document.getElementById('nav-burger');
+  const topnav = document.querySelector('.topnav');
+  if (burger && topnav) {
+    burger.addEventListener('click', () => topnav.classList.toggle('nav-open'));
+    // Close menu when clicking a link
+    topnav.querySelectorAll('.nav-links a').forEach(a =>
+      a.addEventListener('click', () => topnav.classList.remove('nav-open')));
+  }
 
-  // ---------- Product search (client-side) ----------
+  // ---------- Product search (client-side, debounced) ----------
   const search = document.getElementById('product-search');
   const cards = document.querySelectorAll('.card[data-title]');
   const noResults = document.getElementById('no-results');
-  const resultCount = document.querySelector('.result-count strong');
+  const resultCount = document.querySelector('.result-count');
 
   if (search && cards.length) {
     const filter = () => {
@@ -66,14 +47,13 @@
       if (noResults) noResults.classList.toggle('hidden', visible > 0);
       if (resultCount) resultCount.textContent = visible;
     };
-    // Debounce so we don't thrash on every keystroke
     let timer;
     search.addEventListener('input', () => {
       clearTimeout(timer);
       timer = setTimeout(filter, 80);
     });
 
-    // "/" focuses search (skip when typing in another input)
+    // "/" shortcut focuses search (when not already in another input)
     document.addEventListener('keydown', (e) => {
       if (e.key === '/' && !/^(input|select|textarea)$/i.test(document.activeElement.tagName)) {
         e.preventDefault();

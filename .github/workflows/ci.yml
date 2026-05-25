@@ -75,6 +75,12 @@ jobs:
         with:
           context: ./services/${{ matrix.svc }}
           push: true
+          # GIT_SHA is honored by the ui-service Dockerfile to populate
+          # APP_VERSION, which the running app uses as ?v=<sha> on its
+          # static asset links so browsers refetch on every release.
+          # Other service Dockerfiles ignore the unknown arg, which is safe.
+          build-args: |
+            GIT_SHA=${{ steps.tag.outputs.sha }}
           # Three tags per image:
           #   - vN: human-readable release marker (browsable in the registry)
           #   - <sha>: immutable digest-equivalent, used by k8s manifests
