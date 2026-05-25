@@ -30,7 +30,7 @@ spec:
               secretProviderClass: ecom-db-password
       containers:
         - name: order
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/order-service:8c91932
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/order-service:b9476e6
           ports:
             - containerPort: 8084
           volumeMounts:
