@@ -32,6 +32,22 @@ spec:
             readOnly: true
             volumeAttributes:
               secretProviderClass: ecom-db-password
+      # Spread the 2+ replicas (minReplicas: 2 in 70-hpa.yaml) across
+      # different nodes and zones so a single Spot preemption can't take
+      # the service to zero. ScheduleAnyway = soft constraint: if NAP has
+      # only provisioned one node, the second pod still schedules instead
+      # of going Pending.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: catalog-service }
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: catalog-service }
       containers:
         - name: catalog
           image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/catalog-service:46b483c
