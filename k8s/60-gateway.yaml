@@ -51,6 +51,14 @@ spec:
 
 ---
 # Real user traffic: HTTPS on shop.nativeops.site → ui-service:80
+#
+# Cache-Control is enforced at the gateway as a backstop to the same headers
+# emitted by ui-service (see WebMvcConfig.java). Belt-and-suspenders: if the
+# app ever stops setting them, the GLB still does — so a v* deploy is
+# instantly visible to all users without browser cache tricks.
+#
+# Rules are matched longest-prefix-first by the Gateway API spec, so /css/
+# and /js/ win over the / catchall for those URLs.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -65,10 +73,44 @@ spec:
   hostnames:
     - shop.nativeops.site
   rules:
+    # Hashed static assets: cache for a year. Safe — the ?v={sha} query the
+    # app appends means every deploy produces a new URL, naturally bypassing
+    # any cache entry from the prior release.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /css/
+        - path:
+            type: PathPrefix
+            value: /js/
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Cache-Control
+                value: "max-age=31536000, public, immutable"
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: ui-service
+          port: 80
+          weight: 1
+    # Everything else (HTML pages): force revalidation. Without this,
+    # browsers heuristically cache HTML for hours and users miss deploys.
     - matches:
         - path:
             type: PathPrefix
             value: /
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: Cache-Control
+                value: "no-cache, no-store, must-revalidate"
+              - name: Pragma
+                value: "no-cache"
+              - name: Expires
+                value: "0"
       backendRefs:
         - group: ""
           kind: Service

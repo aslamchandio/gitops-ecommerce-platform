@@ -92,6 +92,51 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.svc }}
           cache-to:   type=gha,scope=${{ matrix.svc }},mode=max
 
+      # ----- Cache-Control regression test (ui-service only) -----
+      # Runs the freshly-pushed image and asserts the headers are present.
+      # Any PR that breaks WebMvcConfig.java fails CI here before ship.
+      - name: Verify Cache-Control headers on ui-service image
+        if: matrix.svc == 'ui-service'
+        run: |
+          set -euo pipefail
+          IMG="${{ env.REGISTRY }}/${{ matrix.svc }}:${{ steps.tag.outputs.sha }}"
+          docker pull "$IMG"
+          docker run -d --rm --name ui-verify -p 18080:8080 \
+            -e CATALOG_SERVICE_URL=http://stub:8081 \
+            -e CART_SERVICE_URL=http://stub:8082 \
+            -e CHECKOUT_SERVICE_URL=http://stub:8083 \
+            "$IMG"
+          # Wait up to 60s for the actuator readiness endpoint
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:18080/actuator/health/readiness >/dev/null 2>&1; then
+              echo "ui-service ready"; break
+            fi
+            sleep 2
+          done
+
+          fail() {
+            echo "::error::$1"
+            docker logs ui-verify | tail -30 || true
+            docker stop ui-verify >/dev/null 2>&1 || true
+            exit 1
+          }
+
+          html_cc=$(curl -sS -I http://localhost:18080/ | tr -d '\r' | grep -i '^cache-control:' || true)
+          echo "HTML: $html_cc"
+          echo "$html_cc" | grep -qi 'no-cache' || fail "HTML response missing Cache-Control: no-cache"
+
+          css_cc=$(curl -sS -I http://localhost:18080/css/styles.css | tr -d '\r' | grep -i '^cache-control:' || true)
+          echo "CSS:  $css_cc"
+          echo "$css_cc" | grep -qi 'immutable' || fail "CSS response missing Cache-Control: immutable"
+
+          # The ?v=<sha> cache-bust query must be present in rendered HTML.
+          page=$(curl -sS http://localhost:18080/ || true)
+          echo "$page" | grep -q "styles.css?v=${{ steps.tag.outputs.sha }}" \
+            || fail "Rendered HTML missing styles.css?v=<sha> cache-bust query"
+
+          echo "All cache-control regression checks passed"
+          docker stop ui-verify >/dev/null
+
   # ---------------------------------------------------------------------------
   # 2. Bump image tags on main; ArgoCD will pick this commit up and sync to GKE
   # ---------------------------------------------------------------------------
