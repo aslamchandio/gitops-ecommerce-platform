@@ -91,7 +91,16 @@ spec:
       name: ecom-gateway
       sectionName: http     # only binds to the HTTP listener
   rules:
-    - filters:
+    # Explicit `matches` block: the Gateway API CRD defaults this to
+    # [{ path: { type: PathPrefix, value: "/" } }] when omitted, which the
+    # API server writes onto the stored object. ArgoCD then sees the live
+    # object has a field git doesn't and reports OutOfSync forever. Spell
+    # it out here so git matches the defaulted live state.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
         - type: RequestRedirect
           requestRedirect:
             scheme: https
