@@ -77,18 +77,20 @@ See [`infrastructure/terraform/README.md`](infrastructure/terraform/README.md) f
 
 ```
 .
-├── catalog-service/      Go service + FakeStore sync
-├── cart-service/         Spring Boot + Redis
-├── checkout-service/     Node.js Express
-├── order-service/        Spring Boot + Postgres
-├── ui-service/           Spring Boot + Thymeleaf
+├── services/                    All microservices (one folder + Dockerfile each)
+│   ├── catalog-service/         Go service + FakeStore sync
+│   ├── cart-service/            Spring Boot + Redis
+│   ├── checkout-service/        Node.js Express
+│   ├── order-service/           Spring Boot + Postgres
+│   └── ui-service/              Spring Boot + Thymeleaf
 ├── infrastructure/
-│   └── terraform/        GKE Standard + NAP + Artifact Registry + Cloud SQL + Redis
+│   └── terraform/               GKE Standard + NAP + Artifact Registry + Cloud SQL + Redis + ArgoCD
 ├── k8s/
 │   ├── 00-namespace.yaml
-│   ├── 05-compute-class.yaml   ComputeClass: Spot-first, on-demand fallback
-│   ├── 10-50-*.yaml            One Deployment + Service + PDB per microservice
-│   └── 60-gateway.yaml         Gateway + HTTPRoute + HealthCheckPolicy
-├── scripts/              build/push/deploy + image generation
-└── docker-compose.yml    Local dev stack
+│   ├── 05-compute-class.yaml    ComputeClass: Spot-first, on-demand fallback
+│   ├── 10-50-*.yaml             One Deployment + Service + PDB per microservice
+│   ├── 60-gateway.yaml          Gateway (HTTPS via certmap) + HTTPRoutes + HealthCheckPolicy
+│   └── 70-hpa.yaml              HorizontalPodAutoscaler per service
+├── scripts/                     build/push + image generation
+└── docker-compose.yml           Local dev stack
 ```

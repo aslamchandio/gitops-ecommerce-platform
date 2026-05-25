@@ -239,3 +239,44 @@ variable "argocd_chart_version" {
   type        = string
   description = "argo-cd Helm chart version (https://github.com/argoproj/argo-helm/releases)."
 }
+
+variable "gitops_repo_ssh_url" {
+  type        = string
+  description = "SSH URL of the private git repo ArgoCD pulls from."
+}
+
+variable "gitops_repo_path" {
+  type        = string
+  description = "Path inside the repo containing K8s manifests ArgoCD should sync."
+}
+
+variable "gitops_repo_branch" {
+  type        = string
+  description = "Git branch (or revision) ArgoCD tracks."
+}
+
+variable "gitops_app_namespace" {
+  type        = string
+  description = "Namespace ArgoCD deploys the app workloads into."
+}
+
+# ---- TLS / domain ----
+variable "domain" {
+  type        = string
+  description = "Public hostname users hit. Must already DNS-resolve to the Gateway IP."
+}
+
+variable "tls_certificate_name" {
+  type        = string
+  description = "Name of an existing Google Cloud Certificate Manager certificate covering var.domain."
+}
+
+variable "certificate_map_name" {
+  type        = string
+  description = "Name of the Certificate Map the Gateway references via the networking.gke.io/certmap annotation."
+}
+
+variable "certificate_map_entry_name" {
+  type        = string
+  description = "Name of the Map Entry that binds var.domain to var.tls_certificate_name."
+}

@@ -32,8 +32,12 @@ vendor/
 tfplan
 *.tfplan
 
+# ArgoCD deploy keys — private key MUST NOT be committed
+infrastructure/terraform/.argocd-deploy-key
+infrastructure/terraform/.argocd-deploy-key.pub
+
 # Generated images (regenerate with script)
-ui-service/src/main/resources/static/images/products/*.png
+services/ui-service/src/main/resources/static/images/products/*.png
 
 # Terraform-rendered K8s manifest (contains project-specific IPs, IDs)
 # Re-created on every `terraform apply` from secrets.tf

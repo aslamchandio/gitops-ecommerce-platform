@@ -10,6 +10,7 @@ locals {
     "compute.googleapis.com",
     "iam.googleapis.com",
     "secretmanager.googleapis.com",
+    "certificatemanager.googleapis.com",
   ]
 }
 

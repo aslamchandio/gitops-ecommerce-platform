@@ -27,7 +27,7 @@ services:
       retries: 10
 
   catalog-service:
-    build: ./catalog-service
+    build: ./services/catalog-service
     container_name: catalog-service
     environment:
       DB_HOST: postgres
@@ -45,7 +45,7 @@ services:
         condition: service_healthy
 
   cart-service:
-    build: ./cart-service
+    build: ./services/cart-service
     container_name: cart-service
     environment:
       SPRING_REDIS_HOST: redis
@@ -59,7 +59,7 @@ services:
         condition: service_healthy
 
   checkout-service:
-    build: ./checkout-service
+    build: ./services/checkout-service
     container_name: checkout-service
     environment:
       PORT: 8083
@@ -72,7 +72,7 @@ services:
       - order-service
 
   order-service:
-    build: ./order-service
+    build: ./services/order-service
     container_name: order-service
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/orders
@@ -86,7 +86,7 @@ services:
         condition: service_healthy
 
   ui-service:
-    build: ./ui-service
+    build: ./services/ui-service
     container_name: ui-service
     environment:
       SERVER_PORT: 8080

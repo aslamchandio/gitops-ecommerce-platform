@@ -20,7 +20,7 @@ SERVICES=(catalog-service cart-service checkout-service order-service ui-service
 for svc in "${SERVICES[@]}"; do
   image="${REGISTRY}/${svc}:${TAG}"
   echo "▶ Building ${svc} → ${image}"
-  docker build -t "${image}" "./${svc}"
+  docker build -t "${image}" "./services/${svc}"
   echo "▶ Pushing  ${svc}"
   docker push "${image}"
   # Also tag :latest so deploy scripts can fall back to it.
