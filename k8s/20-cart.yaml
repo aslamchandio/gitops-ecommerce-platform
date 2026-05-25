@@ -67,13 +67,3 @@ spec:
   ports:
     - port: 8082
       targetPort: 8082
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: cart-service
-  namespace: ecom
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels: { app: cart-service }

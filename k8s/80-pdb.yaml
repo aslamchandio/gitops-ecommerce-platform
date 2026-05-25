@@ -1,0 +1,64 @@
+# PodDisruptionBudget for each microservice.
+#
+# Caps voluntary disruption (node drains, cluster upgrades, kubectl evict) to
+# 1 pod at a time. With minReplicas=2 in 70-hpa.yaml this means at least 1
+# pod always remains available across maintenance events — no zero-replica
+# windows from drains.
+#
+# PDBs do NOT protect against involuntary disruption (Spot preemption,
+# kernel panic, OOM) — those are mitigated by the topologySpreadConstraints
+# on each Deployment (spread across nodes + zones).
+#
+# maxUnavailable=1 is intentionally absolute (not %): the same value works
+# whether HPA has scaled to 2, 3, or back down. At 2 replicas it permits
+# 50% disruption; at 3 it permits 33%.
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalog-service
+  namespace: ecom
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: catalog-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cart-service
+  namespace: ecom
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: cart-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: checkout-service
+  namespace: ecom
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: checkout-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order-service
+  namespace: ecom
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: order-service }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ui-service
+  namespace: ecom
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: { app: ui-service }

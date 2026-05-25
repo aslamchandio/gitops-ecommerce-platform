@@ -65,13 +65,3 @@ spec:
   ports:
     - port: 8083
       targetPort: 8083
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: checkout-service
-  namespace: ecom
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels: { app: checkout-service }

@@ -6,15 +6,18 @@ ArgoCD's source of truth for what runs in the `ecom` namespace. This directory i
 k8s/
 ├── 00-namespace.yaml         ecom namespace
 ├── 05-compute-class.yaml     Spot-first ComputeClass (NAP scheduling target)
-├── 10-catalog.yaml           Deployment + Service + PDB for catalog-service
-├── 20-cart.yaml              Deployment + Service + PDB for cart-service
-├── 30-checkout.yaml          Deployment + Service + PDB for checkout-service
-├── 40-order.yaml             Deployment + Service + PDB for order-service
-├── 50-ui.yaml                Deployment + Service + PDB for ui-service
+├── 10-catalog.yaml           Deployment + Service for catalog-service
+├── 20-cart.yaml              Deployment + Service for cart-service
+├── 30-checkout.yaml          Deployment + Service for checkout-service
+├── 40-order.yaml             Deployment + Service for order-service
+├── 50-ui.yaml                Deployment + Service for ui-service
 ├── 60-gateway.yaml           Gateway + 2 HTTPRoutes + HealthCheckPolicy + cache headers
-├── 70-hpa.yaml               HorizontalPodAutoscaler per service
+├── 70-hpa.yaml               HorizontalPodAutoscaler per service (minReplicas=2)
+├── 80-pdb.yaml               PodDisruptionBudget per service (maxUnavailable=1)
 └── generated-config.yaml     ConfigMap with DB/Redis endpoints (terraform-managed, gitignored)
 ```
+
+The cross-cutting concerns (autoscaling, disruption budgets) live in their own files alongside the per-service Deployment + Service so each "axis" is browsable from one place — same pattern Kustomize/Helm setups end up at.
 
 The `00`/`05`/`10`/… numeric prefixes are for human readability; ArgoCD applies in dependency order automatically via Server-Side Apply.
 
@@ -119,9 +122,10 @@ spec:
      svc: [catalog-service, cart-service, checkout-service, order-service, ui-service, <svc>]
    ```
 3. Add it to `docker-compose.yml` for local dev (compose-first workflow).
-4. Create `k8s/<NN>-<svc>.yaml` with Deployment + Service + PDB, using the Spot ComputeClass selector above and pinning `image:` to the registry path (the bump job will rewrite the tag on next release).
+4. Create `k8s/<NN>-<svc>.yaml` with Deployment + Service, using the Spot ComputeClass selector + `topologySpreadConstraints` (hostname + zone, ScheduleAnyway) and pinning `image:` to the registry path (the bump job will rewrite the tag on next release).
 5. If the service needs to be reachable externally, add a rule to `60-gateway.yaml`. Otherwise leave it cluster-internal.
-6. Add an HPA entry to `70-hpa.yaml`.
+6. Add an HPA entry to `70-hpa.yaml` (`minReplicas: 2` for prod resilience).
+7. Add a PDB entry to `80-pdb.yaml` (`maxUnavailable: 1`).
 7. Commit + push. Next `v*` tag will build/push the image and ArgoCD will deploy it.
 
 ---

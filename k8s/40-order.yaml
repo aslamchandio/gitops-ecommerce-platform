@@ -83,13 +83,3 @@ spec:
   ports:
     - port: 8084
       targetPort: 8084
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: order-service
-  namespace: ecom
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels: { app: order-service }

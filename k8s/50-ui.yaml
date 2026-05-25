@@ -76,13 +76,3 @@ spec:
       targetPort: 8080
       appProtocol: HTTP  # hint for the LB health check
   type: ClusterIP
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: ui-service
-  namespace: ecom
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels: { app: ui-service }

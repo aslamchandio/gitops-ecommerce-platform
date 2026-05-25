@@ -95,13 +95,3 @@ spec:
   ports:
     - port: 8081
       targetPort: 8081
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: catalog-service
-  namespace: ecom
-spec:
-  maxUnavailable: 1
-  selector:
-    matchLabels: { app: catalog-service }

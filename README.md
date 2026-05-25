@@ -210,9 +210,10 @@ Plus the build-time cache-bust query: every release bakes its short SHA into `AP
 ├── k8s/                            Manifests synced by ArgoCD
 │   ├── 00-namespace.yaml
 │   ├── 05-compute-class.yaml       ComputeClass: Spot-first, on-demand fallback
-│   ├── 10..50-*.yaml               Deployment + Service + PDB per microservice
+│   ├── 10..50-*.yaml               Deployment + Service per microservice
 │   ├── 60-gateway.yaml             Gateway (HTTPS via certmap) + HTTPRoutes + cache headers + HealthCheckPolicy
-│   └── 70-hpa.yaml                 HorizontalPodAutoscaler per service
+│   ├── 70-hpa.yaml                 HorizontalPodAutoscaler per service (minReplicas=2)
+│   └── 80-pdb.yaml                 PodDisruptionBudget per service (maxUnavailable=1)
 │
 ├── .github/workflows/ci.yml        Build → push → bump-manifests, with cache-header regression test
 ├── docker-compose.yml              Local dev stack
