@@ -47,14 +47,20 @@ Takes ~15 minutes the first time (GKE cluster + Cloud SQL are the slow ones). Th
 
 ### 3. Wire GitHub Actions to GCP
 
-Two outputs need to land in the repo's GitHub Actions secrets (Settings → Secrets and variables → Actions):
+Three values land in the repo's **Settings → Secrets and variables → Actions**:
+
+| Setting type | Name | Value (terraform output) | Why this type |
+|---|---|---|---|
+| Secret | `GCP_WIF_PROVIDER`  | `terraform output github_actions_wif_provider` | URL identifies your pool/provider — kept masked |
+| Secret | `GCP_SERVICE_ACCOUNT` | `terraform output github_actions_sa_email` | SA email — kept masked |
+| **Variable** | `PROJECT_ID` | `terraform output -raw -json | jq -r .project_id.value` (or just the value of `var.project_id`) | Not sensitive (visible in image URLs anyway) and you'll want to edit it without a commit |
+
+CLI shortcut:
 
 ```bash
-terraform output github_actions_wif_provider
-#   → paste into GitHub secret  GCP_WIF_PROVIDER
-
-terraform output github_actions_sa_email
-#   → paste into GitHub secret  GCP_SERVICE_ACCOUNT
+gh secret   set GCP_WIF_PROVIDER    --body "$(terraform output -raw github_actions_wif_provider)"
+gh secret   set GCP_SERVICE_ACCOUNT --body "$(terraform output -raw github_actions_sa_email)"
+gh variable set PROJECT_ID          --body "<your-project-id>"
 ```
 
 The WIF provider is **repo-scoped** — only OIDC tokens from `var.github_repo` (e.g. `aslamchandio/web-app-project`) can mint tokens for the CI service account. The SA's only IAM grant is `roles/artifactregistry.writer` on the `ecom-microservices` repo (no project-wide permissions). If the workflow is ever compromised, blast radius is "can push images to one AR repo".

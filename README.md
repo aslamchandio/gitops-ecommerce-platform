@@ -113,12 +113,16 @@ See [`infrastructure/terraform/README.md`](infrastructure/terraform/README.md) f
 
 ### 2. Wire the GitHub repo to GCP
 
-After `terraform apply`, paste the two outputs into the repo's GitHub Actions secrets:
+After `terraform apply`, set three things in **Repo Settings → Secrets and variables → Actions**:
 
 ```bash
-terraform output github_actions_wif_provider   # → GitHub secret GCP_WIF_PROVIDER
-terraform output github_actions_sa_email       # → GitHub secret GCP_SERVICE_ACCOUNT
+gh secret   set GCP_WIF_PROVIDER    --body "$(terraform output -raw github_actions_wif_provider)"
+gh secret   set GCP_SERVICE_ACCOUNT --body "$(terraform output -raw github_actions_sa_email)"
+gh variable set PROJECT_ID          --body "<your-project-id>"
 ```
+
+- `GCP_WIF_PROVIDER` + `GCP_SERVICE_ACCOUNT` are **secrets** — masked in logs.
+- `PROJECT_ID` is a **variable** — project IDs aren't sensitive (they appear in every image URL), and storing it as a variable means you can change the target project from the UI without a commit.
 
 The WIF provider is **repo-scoped** via an `attribute_condition` — only OIDC tokens from `aslamchandio/web-app-project` can mint tokens for the CI service account. The SA's only IAM grant is `roles/artifactregistry.writer` on the `ecom-microservices` repo (no project-wide permissions).
 

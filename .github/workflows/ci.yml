@@ -21,9 +21,13 @@ on:
         type: string
 
 env:
-  PROJECT_ID: terraform-project-883456
+  # PROJECT_ID is sourced from a repository Variable (Settings → Secrets and
+  # variables → Actions → Variables). Not a secret — project IDs aren't
+  # sensitive and showing them unmasked in logs is fine. Edit from the UI
+  # without a commit. REGION could be moved the same way if needed.
+  PROJECT_ID: ${{ vars.PROJECT_ID }}
   REGION: us-central1
-  REGISTRY: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices
+  REGISTRY: us-central1-docker.pkg.dev/${{ vars.PROJECT_ID }}/ecom-microservices
 
 permissions:
   contents: write   # bump-manifests commits back to main
