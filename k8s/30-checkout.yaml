@@ -22,7 +22,7 @@ spec:
       terminationGracePeriodSeconds: 25
       containers:
         - name: checkout
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/checkout-service:f7d8804
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/checkout-service:8c91932
           ports:
             - containerPort: 8083
           env:
