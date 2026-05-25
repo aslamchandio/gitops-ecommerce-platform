@@ -34,7 +34,7 @@ spec:
               secretProviderClass: ecom-db-password
       containers:
         - name: catalog
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/catalog-service:v1
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/catalog-service:f7d8804
           ports:
             - containerPort: 8081
           volumeMounts:

@@ -22,7 +22,7 @@ spec:
       terminationGracePeriodSeconds: 25
       containers:
         - name: cart
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/cart-service:v1
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/cart-service:f7d8804
           ports:
             - containerPort: 8082
           env:
