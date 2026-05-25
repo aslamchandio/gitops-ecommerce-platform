@@ -8,3 +8,12 @@ region     = "us-central1"
 # master_authorized_networks = ["YOUR.PUBLIC.IP/32"]
 # db_tier                   = "db-f1-micro"
 # redis_memory_gb           = 1
+
+# ---- GitHub Actions (Workload Identity Federation) ----
+# Required if you use .github/workflows/ci.yml. After `terraform apply`, paste
+# `terraform output github_actions_wif_provider` -> GH secret GCP_WIF_PROVIDER
+# `terraform output github_actions_sa_email`     -> GH secret GCP_SERVICE_ACCOUNT
+# github_repo            = "your-gh-org/your-repo"
+# github_wif_pool_id     = "github-pool"
+# github_wif_provider_id = "github-provider"
+# github_actions_sa_id   = "github-actions-ci"

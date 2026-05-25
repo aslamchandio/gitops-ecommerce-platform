@@ -1,0 +1,127 @@
+name: CI - Build, Push & Bump Manifests
+
+# CI (this workflow): on a `v*` tag push, build ALL 5 microservices, push their
+#                     images to Artifact Registry tagged with the git tag (e.g.
+#                     v3), then rewrite k8s/*.yaml image refs on `main` and
+#                     commit them.
+# CD (ArgoCD):        watches `main:k8s/` and syncs the new tags to GKE.
+#
+# Release flow:
+#   git tag v3 && git push origin v3
+# Or trigger manually from the Actions tab with the tag input.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to build & deploy (e.g. v3)'
+        required: true
+        type: string
+
+env:
+  PROJECT_ID: terraform-project-883456
+  REGION: us-central1
+  REGISTRY: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices
+
+permissions:
+  contents: write   # bump-manifests commits back to main
+  id-token: write   # Workload Identity Federation -> GCP
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Build + push all five service images in parallel, tagged with the release
+  # ---------------------------------------------------------------------------
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        svc: [catalog-service, cart-service, checkout-service, order-service, ui-service]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authenticate to GCP (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push ${{ matrix.svc }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ./services/${{ matrix.svc }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.svc }}:${{ steps.tag.outputs.value }}
+            ${{ env.REGISTRY }}/${{ matrix.svc }}:latest
+          cache-from: type=gha,scope=${{ matrix.svc }}
+          cache-to:   type=gha,scope=${{ matrix.svc }},mode=max
+
+  # ---------------------------------------------------------------------------
+  # 2. Bump image tags on main; ArgoCD will pick this commit up and sync to GKE
+  # ---------------------------------------------------------------------------
+  bump-manifests:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main                     # commit goes onto main, not the tag commit
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rewrite image tags in k8s/*.yaml
+        env:
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          set -euo pipefail
+          for svc in catalog-service cart-service checkout-service order-service ui-service; do
+            # Find the manifest that references this service's image.
+            file=$(grep -lE "image:[[:space:]]+${REGISTRY}/${svc}:" k8s/*.yaml || true)
+            if [[ -z "$file" ]]; then
+              echo "WARN: no manifest references ${svc} — skipping"
+              continue
+            fi
+            sed -i -E "s|(image:[[:space:]]+${REGISTRY}/${svc}):[^[:space:]]+|\1:${TAG}|" "$file"
+            echo "▶ ${file}: ${svc} -> ${TAG}"
+          done
+
+      - name: Commit & push to main
+        run: |
+          if git diff --quiet -- k8s/; then
+            echo "Manifests already pinned to ${{ steps.tag.outputs.value }} — nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/
+          git commit -m "ci: bump image tags to ${{ steps.tag.outputs.value }}"
+          git push origin main

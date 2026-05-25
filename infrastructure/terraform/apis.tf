@@ -11,6 +11,8 @@ locals {
     "iam.googleapis.com",
     "secretmanager.googleapis.com",
     "certificatemanager.googleapis.com",
+    "iamcredentials.googleapis.com", # required for Workload Identity Federation token exchange
+    "sts.googleapis.com",            # required for Workload Identity Federation token exchange
   ]
 }
 

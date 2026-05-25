@@ -50,3 +50,14 @@ output "argocd_password_command" {
   description = "Run this to retrieve the initial ArgoCD admin password (then change it via the UI)."
   value       = "kubectl -n ${var.argocd_namespace} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
 }
+
+# ---- GitHub Actions WIF — paste these into GitHub repo secrets ----
+output "github_actions_wif_provider" {
+  description = "Paste this into GitHub Actions secret GCP_WIF_PROVIDER."
+  value       = google_iam_workload_identity_pool_provider.github.name
+}
+
+output "github_actions_sa_email" {
+  description = "Paste this into GitHub Actions secret GCP_SERVICE_ACCOUNT."
+  value       = google_service_account.github_actions.email
+}

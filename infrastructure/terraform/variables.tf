@@ -280,3 +280,24 @@ variable "certificate_map_entry_name" {
   type        = string
   description = "Name of the Map Entry that binds var.domain to var.tls_certificate_name."
 }
+
+# ---- GitHub Actions (Workload Identity Federation) ----
+variable "github_repo" {
+  type        = string
+  description = "GitHub repo in <owner>/<name> form. The WIF provider will ONLY trust OIDC tokens from this repo."
+}
+
+variable "github_wif_pool_id" {
+  type        = string
+  description = "ID of the Workload Identity Pool that holds the GitHub OIDC provider."
+}
+
+variable "github_wif_provider_id" {
+  type        = string
+  description = "ID of the GitHub OIDC provider inside the pool."
+}
+
+variable "github_actions_sa_id" {
+  type        = string
+  description = "GCP service account ID that GitHub Actions impersonates (Artifact Registry writer only)."
+}
