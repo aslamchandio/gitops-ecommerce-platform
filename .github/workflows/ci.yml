@@ -60,13 +60,17 @@ jobs:
           echo "sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP (Workload Identity Federation)
-        uses: google-github-actions/auth@v3
+        # Pinned to v3.0.0 (not @v3 floating major) because GitHub's
+        # action-download cache had stale SHAs for both @v2 and @v3 that
+        # codeload.github.com returned 404 for. Direct tag URL resolves
+        # to a SHA whose tarball is actually downloadable.
+        uses: google-github-actions/auth@v3.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@v3.0.0
 
       - name: Configure docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
