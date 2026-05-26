@@ -106,9 +106,14 @@ variable "gateway_address_name" {
 # Per-region subnet/secondary CIDRs now live in var.regions (declared above).
 # Only the cross-region / global ranges stay top-level here.
 
+variable "private_services_address" {
+  type        = string
+  description = "Starting IP for the reserved global range used by Cloud SQL & Memorystore private services access (e.g. 10.77.0.0). Pinning this explicitly — instead of letting GCP auto-allocate — keeps the range deterministic across rebuilds and prevents accidental overlap with other VPC peering tenants."
+}
+
 variable "private_services_prefix_length" {
   type        = number
-  description = "Prefix length for the reserved global range used by Cloud SQL & Memorystore private services access. /16 = 65k addresses, plenty of headroom."
+  description = "Prefix length for the private services range. /16 = 65k addresses, plenty of headroom for the producer to carve out per-instance /28s."
 }
 
 variable "master_ipv4_cidr_block" {

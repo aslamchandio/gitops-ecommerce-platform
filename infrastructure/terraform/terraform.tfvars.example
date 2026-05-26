@@ -29,6 +29,11 @@ regions = {
 }
 
 # ---- Networking — global ----
+# Pin the private services range so Cloud SQL + Memorystore peering is
+# deterministic across rebuilds. Pick a /16 that doesn't overlap with
+# any vpc_cidr above, gke_pods_cidr, gke_services_cidr, or
+# master_ipv4_cidr_block.
+private_services_address       = "10.77.0.0"
 private_services_prefix_length = 16
 master_ipv4_cidr_block         = "172.16.0.0/28"
 master_authorized_networks     = ["YOUR.PUBLIC.IP/32"]

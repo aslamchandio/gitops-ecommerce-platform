@@ -184,6 +184,7 @@ resource "google_compute_global_address" "private_services" {
   name          = "${local.name}-${var.private_services_range_name}"
   purpose       = "VPC_PEERING"
   address_type  = "INTERNAL"
+  address       = var.private_services_address
   prefix_length = var.private_services_prefix_length
   network       = google_compute_network.vpc.id
 }
