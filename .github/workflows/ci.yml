@@ -103,30 +103,44 @@ jobs:
             | docker login -u oauth2accesstoken --password-stdin \
               "${{ env.REGION }}-docker.pkg.dev"
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      # Buildx and build-push were docker/setup-buildx-action@v3 and
+      # docker/build-push-action@v6, but codeload.github.com keeps 404'ing
+      # third-party action downloads on this runner (same outage that hit
+      # google-github-actions/* above). Replaced with native shell calls;
+      # `docker buildx` is preinstalled on ubuntu-latest. Cache moved from
+      # type=gha (needs vars that only build-push-action exposes) to
+      # type=registry, stored alongside the image in Artifact Registry.
+      - name: Set up Buildx (native)
+        run: |
+          set -euo pipefail
+          docker buildx create --name ci --use
+          docker buildx inspect --bootstrap
 
       - name: Build & push ${{ matrix.svc }}
-        uses: docker/build-push-action@v6
-        with:
-          context: ./services/${{ matrix.svc }}
-          push: true
+        env:
+          IMAGE_BASE: ${{ env.REGISTRY }}/${{ matrix.svc }}
+          TAG_VALUE:  ${{ steps.tag.outputs.value }}
+          TAG_SHA:    ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
           # GIT_SHA is honored by the ui-service Dockerfile to populate
           # APP_VERSION, which the running app uses as ?v=<sha> on its
           # static asset links so browsers refetch on every release.
           # Other service Dockerfiles ignore the unknown arg, which is safe.
-          build-args: |
-            GIT_SHA=${{ steps.tag.outputs.sha }}
+          #
           # Three tags per image:
           #   - vN: human-readable release marker (browsable in the registry)
           #   - <sha>: immutable digest-equivalent, used by k8s manifests
           #   - latest: convenience for ad-hoc pulls; never referenced by k8s
-          tags: |
-            ${{ env.REGISTRY }}/${{ matrix.svc }}:${{ steps.tag.outputs.value }}
-            ${{ env.REGISTRY }}/${{ matrix.svc }}:${{ steps.tag.outputs.sha }}
-            ${{ env.REGISTRY }}/${{ matrix.svc }}:latest
-          cache-from: type=gha,scope=${{ matrix.svc }}
-          cache-to:   type=gha,scope=${{ matrix.svc }},mode=max
+          docker buildx build \
+            --push \
+            --build-arg GIT_SHA="${TAG_SHA}" \
+            --tag "${IMAGE_BASE}:${TAG_VALUE}" \
+            --tag "${IMAGE_BASE}:${TAG_SHA}" \
+            --tag "${IMAGE_BASE}:latest" \
+            --cache-from "type=registry,ref=${IMAGE_BASE}:buildcache" \
+            --cache-to   "type=registry,ref=${IMAGE_BASE}:buildcache,mode=max" \
+            ./services/${{ matrix.svc }}
 
       # ----- Cache-Control regression test (ui-service only) -----
       # Runs the freshly-pushed image and asserts the headers are present.
