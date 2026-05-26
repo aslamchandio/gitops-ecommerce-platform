@@ -59,49 +59,70 @@ jobs:
           # miss an image bump.
           echo "sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
-      # GitHub's runner-side codeload infra has been returning 404 for the
-      # google-github-actions/* action archives (@v2 and @v3 both, on
-      # multiple reruns over hours). Replaced both with a manual WIF
-      # exchange — same security model (still WIF, still repo-scoped
-      # OIDC, still no JSON keys), zero dependency on GitHub Actions
-      # action downloads. The runner image already has curl, jq, and
-      # gcloud preinstalled.
-      - name: Authenticate to GCP (manual WIF exchange)
+      # GitHub's runner-side codeload infra is returning 404 for third-party
+      # action archives (google-github-actions/* and docker/* both, across
+      # @v2 / @v3 / pinned-SHA refs). Replaced with native gcloud WIF —
+      # same security model (still WIF, still repo-scoped OIDC, still no
+      # JSON keys), zero dependency on action downloads. gcloud, jq and
+      # docker are all preinstalled on ubuntu-latest.
+      #
+      # An earlier attempt (v8.3) chained curl→STS→iamcredentials by hand,
+      # but curl -s without -f silently turns HTTP errors into "null" JSON
+      # responses that propagate as the literal string "null" through the
+      # whole pipeline and then get rejected by docker login as
+      # "unauthorized". Letting gcloud do the WIF exchange via an
+      # external_account credentials file gives us proper error surfacing.
+      - name: Authenticate to GCP (gcloud WIF)
         env:
           WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
           SA_EMAIL:     ${{ secrets.GCP_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          # 1. GitHub OIDC token for this workflow run
-          OIDC=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          # 1. Fetch the GitHub OIDC token to a file (gcloud reads the
+          #    subject token from disk per the external_account spec).
+          #    -f makes curl error on non-2xx so we fail loudly, not silently.
+          OIDC_FILE="$(mktemp)"
+          chmod 600 "$OIDC_FILE"
+          curl -sfH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://iam.googleapis.com/${WIF_PROVIDER}" \
-            | jq -r .value)
-          # 2. Exchange via STS for a federated token (still pool-scoped)
-          FED=$(curl -sX POST "https://sts.googleapis.com/v1/token" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "audience=https://iam.googleapis.com/${WIF_PROVIDER}" \
-            --data-urlencode "grantType=urn:ietf:params:oauth:grant-type:token-exchange" \
-            --data-urlencode "requestedTokenType=urn:ietf:params:oauth:token-type:access_token" \
-            --data-urlencode "scope=https://www.googleapis.com/auth/cloud-platform" \
-            --data-urlencode "subjectTokenType=urn:ietf:params:oauth:token-type:jwt" \
-            --data-urlencode "subjectToken=${OIDC}" \
-            | jq -r .access_token)
-          # 3. Impersonate the service account to get a real SA access token
-          ACCESS=$(curl -sX POST \
-            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA_EMAIL}:generateAccessToken" \
-            -H "Authorization: Bearer ${FED}" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d '{"scope":["https://www.googleapis.com/auth/cloud-platform"]}' \
-            | jq -r .accessToken)
-          # Mask in logs and stash for the docker-login step
-          echo "::add-mask::${ACCESS}"
-          echo "GCP_ACCESS_TOKEN=${ACCESS}" >> "$GITHUB_ENV"
+            | jq -er .value > "$OIDC_FILE"
+
+          # 2. Write the WIF credentials JSON that gcloud understands.
+          CRED_FILE="$(mktemp --suffix=.json)"
+          chmod 600 "$CRED_FILE"
+          cat > "$CRED_FILE" <<EOF
+          {
+            "type": "external_account",
+            "audience": "https://iam.googleapis.com/${WIF_PROVIDER}",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA_EMAIL}:generateAccessToken",
+            "credential_source": {
+              "file": "${OIDC_FILE}",
+              "format": { "type": "text" }
+            }
+          }
+          EOF
+
+          # 3. Activate the credentials with gcloud and expose them for
+          #    later steps via GOOGLE_APPLICATION_CREDENTIALS. gcloud will
+          #    surface concrete WIF errors (e.g. permission denied on the
+          #    provider, SA without iam.workloadIdentityUser binding).
+          gcloud auth login --cred-file="$CRED_FILE" --quiet
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${CRED_FILE}" >> "$GITHUB_ENV"
+          gcloud config set project "$PROJECT_ID" --quiet
+          gcloud auth list
 
       - name: Configure docker for Artifact Registry
         run: |
-          echo "$GCP_ACCESS_TOKEN" \
+          # `gcloud auth print-access-token` pulls a fresh SA token from
+          # the cred file we activated above and pipes it to docker login —
+          # avoids the docker-credential-gcloud helper which is fiddly in
+          # CI. Equivalent to what google-github-actions/auth + setup-gcloud
+          # set up for us before codeload started 404'ing the action.
+          gcloud auth print-access-token \
             | docker login -u oauth2accesstoken --password-stdin \
-              "${{ env.REGION }}-docker.pkg.dev"
+              "${REGION}-docker.pkg.dev"
 
       # Buildx and build-push were docker/setup-buildx-action@v3 and
       # docker/build-push-action@v6, but codeload.github.com keeps 404'ing
