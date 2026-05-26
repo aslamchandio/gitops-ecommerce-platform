@@ -48,7 +48,7 @@ spec:
               app: order-service
       containers:
         - name: order
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/order-service:46b483c
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/order-service:2b40f8b
           ports:
             - containerPort: 8084
           volumeMounts:

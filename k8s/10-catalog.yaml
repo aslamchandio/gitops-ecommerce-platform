@@ -55,7 +55,7 @@ spec:
               app: catalog-service
       containers:
         - name: catalog
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/catalog-service:46b483c
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/catalog-service:2b40f8b
           ports:
             - containerPort: 8081
           volumeMounts:

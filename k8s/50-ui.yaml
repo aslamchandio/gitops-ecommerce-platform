@@ -43,7 +43,7 @@ spec:
               app: ui-service
       containers:
         - name: ui
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/ui-service:46b483c
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/ui-service:2b40f8b
           ports:
             - containerPort: 8080
           env:

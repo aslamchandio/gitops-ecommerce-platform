@@ -40,7 +40,7 @@ spec:
               app: checkout-service
       containers:
         - name: checkout
-          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/checkout-service:46b483c
+          image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/checkout-service:2b40f8b
           ports:
             - containerPort: 8083
           env:
