@@ -59,21 +59,49 @@ jobs:
           # miss an image bump.
           echo "sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Authenticate to GCP (Workload Identity Federation)
-        # Pinned to v3.0.0 (not @v3 floating major) because GitHub's
-        # action-download cache had stale SHAs for both @v2 and @v3 that
-        # codeload.github.com returned 404 for. Direct tag URL resolves
-        # to a SHA whose tarball is actually downloadable.
-        uses: google-github-actions/auth@v3.0.0
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3.0.0
+      # GitHub's runner-side codeload infra has been returning 404 for the
+      # google-github-actions/* action archives (@v2 and @v3 both, on
+      # multiple reruns over hours). Replaced both with a manual WIF
+      # exchange — same security model (still WIF, still repo-scoped
+      # OIDC, still no JSON keys), zero dependency on GitHub Actions
+      # action downloads. The runner image already has curl, jq, and
+      # gcloud preinstalled.
+      - name: Authenticate to GCP (manual WIF exchange)
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
+          SA_EMAIL:     ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          # 1. GitHub OIDC token for this workflow run
+          OIDC=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://iam.googleapis.com/${WIF_PROVIDER}" \
+            | jq -r .value)
+          # 2. Exchange via STS for a federated token (still pool-scoped)
+          FED=$(curl -sX POST "https://sts.googleapis.com/v1/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "audience=https://iam.googleapis.com/${WIF_PROVIDER}" \
+            --data-urlencode "grantType=urn:ietf:params:oauth:grant-type:token-exchange" \
+            --data-urlencode "requestedTokenType=urn:ietf:params:oauth:token-type:access_token" \
+            --data-urlencode "scope=https://www.googleapis.com/auth/cloud-platform" \
+            --data-urlencode "subjectTokenType=urn:ietf:params:oauth:token-type:jwt" \
+            --data-urlencode "subjectToken=${OIDC}" \
+            | jq -r .access_token)
+          # 3. Impersonate the service account to get a real SA access token
+          ACCESS=$(curl -sX POST \
+            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA_EMAIL}:generateAccessToken" \
+            -H "Authorization: Bearer ${FED}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d '{"scope":["https://www.googleapis.com/auth/cloud-platform"]}' \
+            | jq -r .accessToken)
+          # Mask in logs and stash for the docker-login step
+          echo "::add-mask::${ACCESS}"
+          echo "GCP_ACCESS_TOKEN=${ACCESS}" >> "$GITHUB_ENV"
 
       - name: Configure docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+        run: |
+          echo "$GCP_ACCESS_TOKEN" \
+            | docker login -u oauth2accesstoken --password-stdin \
+              "${{ env.REGION }}-docker.pkg.dev"
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
