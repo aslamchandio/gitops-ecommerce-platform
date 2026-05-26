@@ -1,0 +1,99 @@
+%%{init: {'theme':'base','themeVariables':{
+  'primaryColor':'#0b1220',
+  'primaryTextColor':'#e8eefc',
+  'primaryBorderColor':'#3b82f6',
+  'lineColor':'#94a3b8',
+  'secondaryColor':'#1e293b',
+  'tertiaryColor':'#0f172a',
+  'fontFamily':'Inter, ui-sans-serif, system-ui, sans-serif',
+  'fontSize':'14px'
+}}}%%
+flowchart TB
+  classDef user        fill:#0ea5e9,stroke:#0369a1,color:#fff,stroke-width:1.5px
+  classDef ingress     fill:#6366f1,stroke:#4338ca,color:#fff,stroke-width:1.5px
+  classDef java        fill:#10b981,stroke:#047857,color:#fff,stroke-width:1.5px
+  classDef go          fill:#06b6d4,stroke:#0e7490,color:#fff,stroke-width:1.5px
+  classDef node        fill:#84cc16,stroke:#4d7c0f,color:#fff,stroke-width:1.5px
+  classDef data        fill:#f59e0b,stroke:#b45309,color:#fff,stroke-width:1.5px
+  classDef obs         fill:#a855f7,stroke:#6b21a8,color:#fff,stroke-width:1.5px
+  classDef gitops      fill:#ef4444,stroke:#991b1b,color:#fff,stroke-width:1.5px
+  classDef registry    fill:#64748b,stroke:#334155,color:#fff,stroke-width:1.5px
+
+  USER([Browser]):::user
+
+  subgraph EDGE["Edge · GCP Global"]
+    direction TB
+    LB[Global External HTTPS LB<br/><i>reserved global IP</i>]:::ingress
+    CERTMAP[Cert Manager<br/>CertificateMap]:::ingress
+    GW[Gateway API<br/>gke-l7-global-external-managed]:::ingress
+    LB --> GW
+    CERTMAP -. TLS termination .-> GW
+  end
+
+  subgraph CLUSTER["GKE Standard · regional · 3 zones · Spot-first"]
+    direction TB
+
+    subgraph APPS["Microservices · ecom namespace"]
+      direction LR
+      UI[UI Service<br/>Spring Boot 3 · :8080]:::java
+      CAT[Catalog Service<br/>Go 1.22 · :8081]:::go
+      CART[Cart Service<br/>Spring Boot · :8082]:::java
+      CHK[Checkout Service<br/>Node.js 20 · :8083]:::node
+      ORD[Order Service<br/>Spring Boot · :8084]:::java
+    end
+
+    subgraph OBS["Observability"]
+      direction LR
+      GMP[Google Managed<br/>Prometheus]:::obs
+      KSM[kube-state-metrics<br/>upstream v2.13]:::obs
+      FE[GMP Frontend<br/>Workload Identity proxy]:::obs
+      GRAF[Grafana 11.3.1<br/>port-forward only]:::obs
+    end
+  end
+
+  subgraph DATA["Private Data Plane · VPC peered, no public IPs"]
+    direction LR
+    PG[(Cloud SQL · Postgres<br/>catalog + orders DBs)]:::data
+    REDIS[(Memorystore Redis<br/>cart sessions)]:::data
+  end
+
+  subgraph CICD["Delivery Pipeline · GitOps"]
+    direction TB
+    GH[GitHub<br/>v* tag push]:::gitops
+    GHA[GitHub Actions<br/>WIF · no JSON keys]:::gitops
+    AR[Artifact Registry<br/>ecom-microservices]:::registry
+    BUMP[bump-manifests<br/>k8s/*.yaml -> short SHA]:::gitops
+    ARGO[ArgoCD v3.4.2<br/>auto-sync · prune · self-heal]:::gitops
+  end
+
+  %% User traffic
+  USER -->|HTTPS shop.nativeops.site| LB
+  GW --> UI
+
+  %% Internal service calls
+  UI --> CAT
+  UI --> CART
+  UI --> CHK
+  CHK --> CART
+  CHK --> ORD
+
+  %% Data
+  CAT --> PG
+  ORD --> PG
+  CART --> REDIS
+
+  %% Observability fan-in
+  UI   -. /actuator/prometheus .-> GMP
+  CART -. /actuator/prometheus .-> GMP
+  ORD  -. /actuator/prometheus .-> GMP
+  KSM  -. /metrics .-> GMP
+  GMP --> FE
+  FE -->|PromQL HTTP API| GRAF
+
+  %% GitOps
+  GH --> GHA
+  GHA -->|docker buildx push| AR
+  GHA --> BUMP
+  BUMP -->|commit to main| ARGO
+  AR  -. pull images .-> APPS
+  ARGO -->|server-side apply| APPS

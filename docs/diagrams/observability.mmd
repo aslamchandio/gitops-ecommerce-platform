@@ -1,0 +1,81 @@
+%%{init: {'theme':'base','themeVariables':{
+  'primaryColor':'#0b1220',
+  'primaryTextColor':'#e8eefc',
+  'primaryBorderColor':'#3b82f6',
+  'lineColor':'#94a3b8',
+  'secondaryColor':'#1e293b',
+  'tertiaryColor':'#0f172a',
+  'fontFamily':'Inter, ui-sans-serif, system-ui, sans-serif',
+  'fontSize':'14px'
+}}}%%
+flowchart LR
+  classDef app    fill:#10b981,stroke:#047857,color:#fff,stroke-width:1.5px
+  classDef scrape fill:#a855f7,stroke:#6b21a8,color:#fff,stroke-width:1.5px
+  classDef gmp    fill:#3b82f6,stroke:#1d4ed8,color:#fff,stroke-width:1.5px
+  classDef wi     fill:#f59e0b,stroke:#b45309,color:#fff,stroke-width:1.5px
+  classDef viz    fill:#ec4899,stroke:#9d174d,color:#fff,stroke-width:1.5px
+
+  subgraph SOURCES["Metric sources · in cluster"]
+    direction TB
+    UI[UI Service<br/>/actuator/prometheus]:::app
+    CART[Cart Service<br/>/actuator/prometheus]:::app
+    ORD[Order Service<br/>/actuator/prometheus]:::app
+    CAD[cAdvisor<br/>kubelet endpoints]:::scrape
+    KSM[kube-state-metrics<br/>upstream v2.13]:::scrape
+    KUBELET[Kubelet<br/>kubelet_volume_stats_*]:::scrape
+  end
+
+  subgraph SCRAPE["GMP managed scrape components"]
+    direction TB
+    POD_MON[PodMonitoring CRDs<br/>k8s/90 + k8s/98]:::scrape
+    SYS[SYSTEM_COMPONENTS]:::scrape
+    CAD_C[CADVISOR]:::scrape
+    KUB_C[KUBELET]:::scrape
+    STO_C[STORAGE]:::scrape
+    WORK_C[POD · DEPLOYMENT<br/>STATEFULSET · DAEMONSET · HPA]:::scrape
+  end
+
+  subgraph GMP["Google Managed Prometheus"]
+    direction TB
+    INGEST[ingest pipeline]:::gmp
+    STORE[Cloud Monitoring · prometheus_target]:::gmp
+    QUERY[PromQL endpoint<br/>monitoring.googleapis.com]:::gmp
+  end
+
+  subgraph PROXY["Auth proxy · k8s/95"]
+    direction TB
+    SA[KSA gmp-frontend]:::wi
+    GSA[GSA grafana-gmp-reader<br/>roles/monitoring.viewer]:::wi
+    FE[gmp-frontend :9090<br/>vanilla Prometheus API]:::wi
+    SA -. Workload Identity .-> GSA
+    GSA -. impersonate .-> FE
+  end
+
+  subgraph VIZ["Grafana · k8s/96 + k8s/97"]
+    direction TB
+    DS[Datasource: GMP<br/>provisioned · read-only]:::viz
+    SB[Spring Boot starter<br/>JVM · HTTP · CPU]:::viz
+    K8S[K8S Overview<br/>grafana.com/15661<br/>170 panels]:::viz
+  end
+
+  UI      --> POD_MON
+  CART    --> POD_MON
+  ORD     --> POD_MON
+  KSM     --> POD_MON
+  CAD     --> CAD_C
+  KUBELET --> KUB_C
+  KUBELET --> STO_C
+
+  POD_MON --> INGEST
+  SYS     --> INGEST
+  CAD_C   --> INGEST
+  KUB_C   --> INGEST
+  STO_C   --> INGEST
+  WORK_C  --> INGEST
+
+  INGEST --> STORE
+  STORE  --> QUERY
+  QUERY  --> FE
+  FE     --> DS
+  DS     --> SB
+  DS     --> K8S

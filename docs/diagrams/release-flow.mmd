@@ -1,0 +1,38 @@
+%%{init: {'theme':'base','themeVariables':{
+  'primaryColor':'#0b1220',
+  'primaryTextColor':'#e8eefc',
+  'primaryBorderColor':'#3b82f6',
+  'lineColor':'#94a3b8',
+  'secondaryColor':'#1e293b',
+  'tertiaryColor':'#0f172a',
+  'fontFamily':'Inter, ui-sans-serif, system-ui, sans-serif',
+  'fontSize':'14px'
+}}}%%
+sequenceDiagram
+  autonumber
+  participant DEV as Developer
+  participant GH  as GitHub<br/>main + v* tag
+  participant GHA as GitHub Actions
+  participant WIF as Workload Identity<br/>Federation
+  participant AR  as Artifact Registry
+  participant ARG as ArgoCD
+  participant GKE as GKE · ecom ns
+
+  DEV->>GH: git tag v8 && git push origin v8
+  GH-->>GHA: webhook triggers ci.yml
+  Note over GHA: build-and-push (matrix · 5 services)
+
+  GHA->>WIF: GitHub OIDC token<br/>(repo-scoped attribute_condition)
+  WIF-->>GHA: short-lived GCP access token<br/>(impersonates github-actions-ci SA)
+
+  GHA->>AR: docker buildx build --push<br/>tags: v8 · short-sha · latest
+  Note over GHA: ui-service smoke test:<br/>pull image · curl · assert<br/>Cache-Control + ?v=<sha>
+
+  GHA->>GH: bump-manifests job<br/>rewrite k8s/*.yaml image: <short-sha><br/>commit + push to main
+
+  GH-->>ARG: poll detects new revision
+  ARG->>AR: pull pinned image SHAs
+  ARG->>GKE: Server-Side Apply
+  Note over GKE: PDBs respected · HPAs preserved<br/>NEG drains old endpoints<br/>topology spread enforced
+
+  GKE-->>DEV: live at shop.nativeops.site<br/>(~3 minutes end-to-end)
