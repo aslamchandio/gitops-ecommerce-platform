@@ -1,0 +1,296 @@
+# Open-source Grafana visualising metrics scraped by GMP.
+#
+# Architecture (see 95-gmp-frontend.yaml for the auth proxy half):
+#   Grafana → http://gmp-frontend:9090 (in-cluster, ClusterIP, no auth)
+#     gmp-frontend → monitoring.googleapis.com (Workload Identity, read-only)
+#
+# Access pattern: port-forward only, no public exposure on purpose
+#   kubectl -n ecom port-forward svc/grafana 3000:3000
+#   open http://localhost:3000  (admin / see grafana-admin secret)
+#
+# State:
+#   - /var/lib/grafana (sqlite, users, prefs)  → PVC `grafana-data`
+#   - /var/lib/grafana-dashboards (provisioned) → ConfigMap, read-only
+#
+# Anything created in the UI (new dashboards, datasource tweaks, users)
+# survives pod restarts via the PVC. The seeded dashboard in this file is
+# read-only because it lives in a ConfigMap — copy it via "Save as…" if
+# you want to edit.
+
+# Admin password. Placeholder value — rotate after first login OR replace
+# this Secret with one synced from Secret Manager via the existing
+# SecretProviderClass pattern (see secret_manager.tf).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-admin
+  namespace: ecom
+type: Opaque
+stringData:
+  admin-user: admin
+  admin-password: ChangeMeOnFirstLogin!
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: ecom
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+  # No storageClassName → use the cluster default (pd-balanced on GKE).
+
+---
+# Prometheus datasource pointing at the in-cluster GMP frontend.
+# Provisioning at startup means it's there before the user logs in;
+# no manual setup required.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: ecom
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: GMP
+        type: prometheus
+        uid: gmp
+        access: proxy
+        url: http://gmp-frontend.ecom.svc.cluster.local:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          httpMethod: POST
+          timeInterval: 30s
+
+---
+# Dashboard provider — Grafana watches this directory and (re)loads any
+# *.json file as a read-only dashboard. The actual dashboard JSON is in
+# the next ConfigMap below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: ecom
+data:
+  providers.yaml: |
+    apiVersion: 1
+    providers:
+      - name: ecom
+        orgId: 1
+        folder: ecom
+        type: file
+        disableDeletion: true
+        editable: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana-dashboards
+
+---
+# Starter dashboard: four panels covering JVM heap, HTTP throughput,
+# p95 latency, and per-pod CPU — the things you'll actually look at
+# first when something feels slow.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: ecom
+data:
+  spring-boot-overview.json: |
+    {
+      "uid": "spring-boot-overview",
+      "title": "Spring Boot — Overview (ecom)",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "gmp" },
+            "query": "label_values(jvm_memory_used_bytes, job)",
+            "refresh": 2,
+            "includeAll": true,
+            "multi": true
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "JVM heap used",
+          "datasource": { "type": "prometheus", "uid": "gmp" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "bytes" } },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (job) (jvm_memory_used_bytes{job=~\"$service\", area=\"heap\"})",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "HTTP requests / sec",
+          "datasource": { "type": "prometheus", "uid": "gmp" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "fieldConfig": { "defaults": { "unit": "reqps" } },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (job) (rate(http_server_requests_seconds_count{job=~\"$service\"}[5m]))",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "HTTP p95 latency",
+          "datasource": { "type": "prometheus", "uid": "gmp" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (job, le) (rate(http_server_requests_seconds_bucket{job=~\"$service\"}[5m])))",
+              "legendFormat": "{{job}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Process CPU usage",
+          "datasource": { "type": "prometheus", "uid": "gmp" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1 } },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "process_cpu_usage{job=~\"$service\"}",
+              "legendFormat": "{{job}} / {{instance}}"
+            }
+          ]
+        }
+      ]
+    }
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: ecom
+  labels:
+    app: grafana
+spec:
+  # Single replica — RWO PVC can only attach to one pod at a time, and
+  # there's nothing here that warrants HA for a port-forward dev tool.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      securityContext:
+        # Grafana's container runs as UID 472; PVC needs matching ownership.
+        fsGroup: 472
+        runAsNonRoot: true
+        runAsUser: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.3.1
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-password
+            # Disable telemetry + signup + anonymous access. This is an
+            # ops tool for one user behind kubectl port-forward.
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana-dashboards
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-data
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+
+---
+# ClusterIP — port-forward access only, never exposed via Gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: ecom
+  labels:
+    app: grafana
+spec:
+  type: ClusterIP
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

@@ -1,0 +1,98 @@
+# GMP query frontend: a thin auth proxy that exposes the standard
+# Prometheus HTTP API and forwards queries to monitoring.googleapis.com
+# (the same backend that PodMonitoring scrapes flow INTO).
+#
+# Grafana's Prometheus datasource (in 96-grafana.yaml) points at
+# http://gmp-frontend.ecom.svc.cluster.local:9090 — Grafana treats it
+# as a vanilla Prometheus and never needs GCP credentials of its own.
+#
+# Auth: pod runs as KSA `gmp-frontend`, which is bound (via Workload
+# Identity in infrastructure/terraform/grafana.tf) to the GCP SA
+# `grafana-gmp-reader@<project>.iam.gserviceaccount.com` with
+# roles/monitoring.viewer.
+#
+# Image: prometheus-engine/frontend version MUST match the cluster's
+# GMP operator version (kubectl -n gmp-system get pods → image tag).
+# Cluster currently runs v0.18.0-gke.2.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gmp-frontend
+  namespace: ecom
+  annotations:
+    iam.gke.io/gcp-service-account: grafana-gmp-reader@terraform-project-883456.iam.gserviceaccount.com
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gmp-frontend
+  namespace: ecom
+  labels:
+    app: gmp-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gmp-frontend
+  template:
+    metadata:
+      labels:
+        app: gmp-frontend
+    spec:
+      serviceAccountName: gmp-frontend
+      # Workload Identity requires the GKE metadata server; gke-metadata-server
+      # only runs on Linux nodes, so we don't need any toleration here, but we
+      # do want to stay off any tainted system pools — default scheduling is
+      # fine.
+      containers:
+        - name: frontend
+          image: gke.gcr.io/prometheus-engine/frontend:v0.18.0-gke.2
+          args:
+            - --web.listen-address=:9090
+            - --query.project-id=terraform-project-883456
+          ports:
+            - name: web
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            initialDelaySeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: [ALL]
+
+---
+# ClusterIP only — Grafana is the sole consumer, no public exposure.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gmp-frontend
+  namespace: ecom
+  labels:
+    app: gmp-frontend
+spec:
+  type: ClusterIP
+  selector:
+    app: gmp-frontend
+  ports:
+    - name: web
+      port: 9090
+      targetPort: web
