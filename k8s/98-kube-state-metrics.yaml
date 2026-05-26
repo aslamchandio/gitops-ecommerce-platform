@@ -1,0 +1,181 @@
+# Upstream kube-state-metrics deployed inside the cluster, scraped by
+# GMP via PodMonitoring.
+#
+# Why this exists when GMP already ships a managed kube-state-metrics:
+# GMP's managed KSM (in namespace gke-managed-cim) emits a *curated
+# subset* of upstream KSM metrics — mostly workload-level signals like
+# kube_deployment_spec_replicas, kube_horizontalpodautoscaler_*,
+# kube_pod_status_phase. It deliberately omits kube_node_info,
+# kube_pod_info, kube_pod_container_info, kube_secret_info,
+# kube_service_info, kube_configmap_info, and so on, which are exactly
+# what most community dashboards (e.g. grafana.com/15661) query.
+#
+# Running the full upstream KSM gives the dashboards everything they
+# expect. For metrics that DO overlap with the managed set, dashboards
+# may double-count if they don't filter by job — future dashboards
+# should prefer `{job="kube-state-metrics"}` to scope to this instance.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+  namespace: ecom
+
+---
+# Cluster-wide READ access only — KSM never writes anything. Sourced
+# from the upstream standard install at
+# github.com/kubernetes/kube-state-metrics/blob/main/examples/standard.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-state-metrics
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, nodes, pods, services, serviceaccounts, resourcequotas, replicationcontrollers, limitranges, persistentvolumeclaims, persistentvolumes, namespaces, endpoints]
+    verbs: [list, watch]
+  - apiGroups: [apps]
+    resources: [statefulsets, daemonsets, deployments, replicasets]
+    verbs: [list, watch]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [list, watch]
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [list, watch]
+  - apiGroups: [certificates.k8s.io]
+    resources: [certificatesigningrequests]
+    verbs: [list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses, volumeattachments]
+    verbs: [list, watch]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+    verbs: [list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingressclasses, ingresses]
+    verbs: [list, watch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterrolebindings, clusterroles, rolebindings, roles]
+    verbs: [list, watch]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: ecom
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: ecom
+  labels:
+    app: kube-state-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: kube-state-metrics
+    spec:
+      serviceAccountName: kube-state-metrics
+      automountServiceAccountToken: true
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+          ports:
+            - name: http-metrics
+              containerPort: 8080
+            - name: telemetry
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /
+              port: telemetry
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: telemetry
+            initialDelaySeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop: [ALL]
+
+---
+# ClusterIP — only GMP's in-cluster collectors need to reach it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: ecom
+  labels:
+    app: kube-state-metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: kube-state-metrics
+  ports:
+    - name: http-metrics
+      port: 8080
+      targetPort: http-metrics
+    - name: telemetry
+      port: 8081
+      targetPort: telemetry
+
+---
+# Tell GMP to scrape /metrics on port 8080 every 30s. The series flow
+# into the same monitoring.googleapis.com PromQL endpoint the
+# gmp-frontend already queries — Grafana picks them up automatically.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: kube-state-metrics
+  namespace: ecom
+  labels:
+    app: kube-state-metrics
+spec:
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  endpoints:
+    - port: 8080
+      path: /metrics
+      interval: 30s
