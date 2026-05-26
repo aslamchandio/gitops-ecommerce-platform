@@ -5,6 +5,16 @@
 #  - Gateway API controller enabled (CHANNEL_STANDARD)
 #  - ComputeClass for app workloads is defined in k8s/05-compute-class.yaml,
 #    which targets Spot VMs with on-demand fallback.
+
+# Discover the zones available in var.region so NAP and the system pool don't
+# need a hardcoded zone list. Flipping var.region re-derives the right zones
+# automatically; a new zone added to the region by GCP is picked up on next
+# `terraform apply`.
+data "google_compute_zones" "available" {
+  region = var.region
+  status = "UP"
+}
+
 resource "google_container_cluster" "primary" {
   name     = var.cluster_name
   location = var.region # regional control plane = HA
@@ -75,6 +85,12 @@ resource "google_container_cluster" "primary" {
       minimum       = 1
       maximum       = var.nap_memory_limit_gb
     }
+
+    # Restrict NAP to the zones the region exposes today. Authoritative for
+    # ALL ComputeClass-driven node creation in this cluster — the k8s
+    # ComputeClass intentionally omits its own location.zones so it inherits
+    # from here (single source of truth).
+    auto_provisioning_locations = data.google_compute_zones.available.names
 
     auto_provisioning_defaults {
       service_account = google_service_account.gke_nodes.email
