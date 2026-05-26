@@ -31,13 +31,23 @@ variable "gke_region" {
 }
 
 variable "regions" {
-  description = "Map of GCP region -> per-region network config. Two keys = two-region VPC fan-out. The cluster + data plane only sit in var.gke_region; other regions just get a subnet trio (gke/vm/proxy) wired into the same VPC for future workloads."
+  description = "Map of GCP region -> per-region network config. Each subnet type is independently opt-in so a region can carry only the subnets it actually needs (e.g. a GKE region with no VMs, or a VM-only region with no GKE)."
   type = map(object({
-    vpc_cidr          = string                # /16 sliced into gke + vm subnets via cidrsubnet
-    subnet_newbits    = number                # how many bits to add when slicing vpc_cidr (8 -> /24s from /16)
-    gke_pods_cidr     = optional(string)      # only set for var.gke_region
-    gke_services_cidr = optional(string)      # only set for var.gke_region
-    proxy_cidr        = string                # /23+ for REGIONAL_MANAGED_PROXY (regional internal LB)
+    vpc_cidr          = string                # /16 used by cidrsubnet for whichever primary ranges this region carries
+    subnet_newbits    = number                # how many bits to add when slicing vpc_cidr (8 -> /24s, 4 -> /20s)
+
+    # GKE subnet (primary + secondary pods/services). Created when BOTH
+    # secondary CIDRs are set. The cluster itself anchors to var.gke_region.
+    gke_pods_cidr     = optional(string)
+    gke_services_cidr = optional(string)
+
+    # Plain VM subnet primary range (sliced from vpc_cidr at position 2).
+    # Set vm_subnet = true to opt this region in for Compute Engine / non-GKE workloads.
+    vm_subnet         = optional(bool, false)
+
+    # Proxy-only subnet for REGIONAL_MANAGED_PROXY (regional internal LB).
+    # Set proxy_cidr only in regions that host a regional Gateway/LB.
+    proxy_cidr        = optional(string)
   }))
 }
 

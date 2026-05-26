@@ -18,12 +18,12 @@ regions = {
     subnet_newbits    = 8                  # /16 -> /24 subnets
     gke_pods_cidr     = "10.16.0.0/14"     # only set in var.gke_region
     gke_services_cidr = "10.32.0.0/20"     # only set in var.gke_region
-    proxy_cidr        = "10.0.128.0/23"    # for REGIONAL_MANAGED_PROXY
+    proxy_cidr        = "10.0.128.0/23"    # optional — set for regions that host a regional LB
   }
-  us-east1 = {
+  us-west1 = {
     vpc_cidr       = "10.1.0.0/16"
     subnet_newbits = 8
-    proxy_cidr     = "10.1.128.0/23"
+    # No proxy_cidr -> proxy subnet skipped in this region.
     # No gke_pods_cidr / gke_services_cidr -> primary subnet only.
   }
 }

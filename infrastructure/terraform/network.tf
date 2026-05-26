@@ -26,13 +26,16 @@ resource "google_compute_network" "vpc" {
   depends_on                      = [google_project_service.enabled]
 }
 
-# ---- GKE subnet (per region) ----
-# In var.gke_region this subnet carries two secondary IP ranges (pods +
-# services) used by GKE VPC-native networking. Other regions get a plain
-# subnet — same naming pattern so future GKE-in-other-region just flips
-# the secondary block on via tfvars.
+# ---- GKE subnet (only in regions that set both gke_*_cidr) ----
+# Primary range sliced from vpc_cidr; secondary ranges for pods + services
+# attached only in var.gke_region (the cluster lives there). Other regions
+# can declare gke_*_cidr too — the secondary ranges flip on automatically
+# when their region matches var.gke_region.
 resource "google_compute_subnetwork" "gke" {
-  for_each = var.regions
+  for_each = {
+    for region, cfg in var.regions : region => cfg
+    if cfg.gke_pods_cidr != null && cfg.gke_services_cidr != null
+  }
 
   name                     = "${local.name}-gke-${each.key}"
   ip_cidr_range            = local.region_subnets[each.key].gke_cidr
@@ -41,12 +44,7 @@ resource "google_compute_subnetwork" "gke" {
   private_ip_google_access = true
 
   dynamic "secondary_ip_range" {
-    for_each = (
-      each.key == var.gke_region
-      && each.value.gke_pods_cidr != null
-      && each.value.gke_services_cidr != null
-    ) ? [1] : []
-
+    for_each = each.key == var.gke_region ? [1] : []
     content {
       range_name    = "${local.name}-gke-pods"
       ip_cidr_range = each.value.gke_pods_cidr
@@ -54,12 +52,7 @@ resource "google_compute_subnetwork" "gke" {
   }
 
   dynamic "secondary_ip_range" {
-    for_each = (
-      each.key == var.gke_region
-      && each.value.gke_pods_cidr != null
-      && each.value.gke_services_cidr != null
-    ) ? [1] : []
-
+    for_each = each.key == var.gke_region ? [1] : []
     content {
       range_name    = "${local.name}-gke-services"
       ip_cidr_range = each.value.gke_services_cidr
@@ -73,11 +66,14 @@ resource "google_compute_subnetwork" "gke" {
   }
 }
 
-# ---- Plain VM subnet (per region) ----
-# Primary range only. Use for Compute Engine instances, GCE-style workloads,
-# or anything that's not GKE nodes.
+# ---- Plain VM subnet (only in regions that set vm_subnet = true) ----
+# Primary range only. Use for Compute Engine instances, GCE-style
+# workloads, or anything that's not GKE nodes.
 resource "google_compute_subnetwork" "vm" {
-  for_each = var.regions
+  for_each = {
+    for region, cfg in var.regions : region => cfg
+    if cfg.vm_subnet == true
+  }
 
   name                     = "${local.name}-vm-${each.key}"
   ip_cidr_range            = local.region_subnets[each.key].vm_cidr
@@ -92,14 +88,21 @@ resource "google_compute_subnetwork" "vm" {
   }
 }
 
-# ---- Proxy-only subnet (per region) ----
+# ---- Proxy-only subnet (per region, optional) ----
 # Required by regional internal HTTPS / TCP load balancers (Envoy fleet).
 # Exactly ONE proxy-only subnet per (region, VPC); GCP rejects a second.
 # Workloads cannot be placed here — this range is reserved for managed
 # proxies. role=ACTIVE means in-use (vs BACKUP during migrations).
 # Note: log_config is not supported on this subnet type.
+#
+# Skipped for regions that don't set proxy_cidr — no point reserving a
+# /23 in a region that has no regional LB. Flip a proxy on later by
+# adding proxy_cidr to that region's entry in var.regions.
 resource "google_compute_subnetwork" "proxy" {
-  for_each = var.regions
+  for_each = {
+    for region, cfg in var.regions : region => cfg
+    if cfg.proxy_cidr != null
+  }
 
   name          = "${local.name}-proxy-${each.key}"
   ip_cidr_range = each.value.proxy_cidr
@@ -109,15 +112,24 @@ resource "google_compute_subnetwork" "proxy" {
   role          = "ACTIVE"
 }
 
-# ---- Cloud Routers + NAT (per region) ----
+# ---- Cloud Routers + NAT (only in regions that have at least one
+#       NAT-eligible subnet — gke or vm) ----
 # Private nodes have no external IPs. Cloud NAT gives them outbound
-# internet for image pulls, googleapis.com, OS updates. Each region needs
-# its own router + NAT (Cloud NAT is regional).
+# internet for image pulls, googleapis.com, OS updates. Each region
+# needs its own router + NAT (both are regional).
 #
-# In var.gke_region the NAT also translates the pod secondary range, so
-# pods without external IPs can reach the internet.
+# In var.gke_region the NAT additionally translates the pod secondary
+# range so pods without external IPs can reach the internet.
+# Proxy-only subnets are intentionally excluded — proxies don't egress.
+locals {
+  nat_regions = {
+    for region, cfg in var.regions : region => cfg
+    if (cfg.gke_pods_cidr != null && cfg.gke_services_cidr != null) || cfg.vm_subnet == true
+  }
+}
+
 resource "google_compute_router" "router" {
-  for_each = var.regions
+  for_each = local.nat_regions
 
   name    = "${local.name}-router-${each.key}"
   region  = each.key
@@ -125,7 +137,7 @@ resource "google_compute_router" "router" {
 }
 
 resource "google_compute_router_nat" "nat" {
-  for_each = var.regions
+  for_each = local.nat_regions
 
   name                               = "${local.name}-nat-${each.key}"
   router                             = google_compute_router.router[each.key].name
@@ -133,25 +145,29 @@ resource "google_compute_router_nat" "nat" {
   nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
 
-  # Always NAT the GKE subnet (primary + pods in the GKE region) AND the
-  # VM subnet. Proxy subnet is excluded — proxies don't egress through NAT.
-  subnetwork {
-    name = google_compute_subnetwork.gke[each.key].id
+  # NAT the GKE subnet only if this region actually has one.
+  dynamic "subnetwork" {
+    for_each = (each.value.gke_pods_cidr != null && each.value.gke_services_cidr != null) ? [1] : []
+    content {
+      name = google_compute_subnetwork.gke[each.key].id
 
-    source_ip_ranges_to_nat = (
-      each.key == var.gke_region
-      && each.value.gke_pods_cidr != null
-    ) ? ["PRIMARY_IP_RANGE", "LIST_OF_SECONDARY_IP_RANGES"] : ["ALL_IP_RANGES"]
+      source_ip_ranges_to_nat = (
+        each.key == var.gke_region
+      ) ? ["PRIMARY_IP_RANGE", "LIST_OF_SECONDARY_IP_RANGES"] : ["ALL_IP_RANGES"]
 
-    secondary_ip_range_names = (
-      each.key == var.gke_region
-      && each.value.gke_pods_cidr != null
-    ) ? ["${local.name}-gke-pods"] : []
+      secondary_ip_range_names = (
+        each.key == var.gke_region
+      ) ? ["${local.name}-gke-pods"] : []
+    }
   }
 
-  subnetwork {
-    name                    = google_compute_subnetwork.vm[each.key].id
-    source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
+  # NAT the VM subnet only if this region opted into one.
+  dynamic "subnetwork" {
+    for_each = each.value.vm_subnet == true ? [1] : []
+    content {
+      name                    = google_compute_subnetwork.vm[each.key].id
+      source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
+    }
   }
 
   log_config {
