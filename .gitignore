@@ -24,6 +24,7 @@ vendor/
 
 # Terraform
 .terraform/
+.terraform.lock.hcl   # provider-version lock file — local to each contributor
 *.tfstate
 *.tfstate.backup
 *.tfvars

@@ -39,7 +39,7 @@ terraform init        # connects to the GCS backend (see backend.tf)
 terraform apply
 ```
 
-State lives in `gs://aslam-terraform-bucket/prod/ecommerce-project/` (see [`backend.tf`](backend.tf)). `terraform init` pulls the existing state from there — no local `.tfstate` file is created. Bucket has versioning enabled so a bad apply can be rolled back via object generation history.
+State lives in `gs://<your-tf-state-bucket>/prod/c1-ecommerce-project/` (the actual bucket name is set in [`backend.tf`](backend.tf) — kept out of this README so the value isn't searchable in public mirrors). `terraform init` pulls the existing state from there — no local `.tfstate` file is created. The bucket has versioning enabled so a bad apply can be rolled back via object generation history.
 
 Takes ~15 minutes the first time (GKE cluster + Cloud SQL are the slow ones). The apply will:
 
@@ -180,19 +180,23 @@ For db-f1-micro (0.6GB RAM), don't exceed ~100 — connections consume memory an
 
 ### Remote state
 
-State lives in `gs://aslam-terraform-bucket/prod/ecommerce-project/default.tfstate`. The bucket has versioning enabled, so each `terraform apply` creates a new object generation:
+State lives at `gs://<your-tf-state-bucket>/prod/c1-ecommerce-project/default.tfstate` — the bucket name is in [`backend.tf`](backend.tf) only (not in this README). The bucket has versioning enabled, so each `terraform apply` creates a new object generation:
 
 ```bash
+# Capture the bucket once so the commands below stay generic.
+BUCKET=$(grep -oP 'bucket\s*=\s*"\K[^"]+' backend.tf)
+PREFIX=$(grep -oP 'prefix\s*=\s*"\K[^"]+' backend.tf)
+
 # List historical state versions
-gcloud storage ls -a gs://aslam-terraform-bucket/prod/ecommerce-project/default.tfstate
+gcloud storage ls -a "gs://$BUCKET/$PREFIX/default.tfstate"
 
 # Roll back to a specific generation
 gcloud storage cp \
-  gs://aslam-terraform-bucket/prod/ecommerce-project/default.tfstate#<generation> \
-  gs://aslam-terraform-bucket/prod/ecommerce-project/default.tfstate
+  "gs://$BUCKET/$PREFIX/default.tfstate#<generation>" \
+  "gs://$BUCKET/$PREFIX/default.tfstate"
 ```
 
-To add a new environment under the same bucket, copy [`backend.tf`](backend.tf) to a new module directory with a different prefix (e.g. `staging/ecommerce-project`).
+To add a new environment under the same bucket, copy [`backend.tf`](backend.tf) to a new module directory with a different prefix (e.g. `staging/c1-ecommerce-project`). The `c1-` slug identifies this configuration; bump it (`c2-`, etc.) if you spin up parallel clusters.
 
 ### Destroy everything
 
@@ -225,7 +229,7 @@ infrastructure/terraform/
 ├── variables.tf               Declarations only (no defaults — fail fast)
 ├── outputs.tf                 Cluster name, gateway IP, WIF outputs, etc.
 ├── versions.tf                Terraform + provider version pins
-├── backend.tf                 GCS remote state config (prod/ecommerce-project)
+├── backend.tf                 GCS remote state config (prefix: prod/c1-ecommerce-project)
 ├── terraform.tfvars.example   Template — copy to terraform.tfvars and fill in
 └── terraform.tfvars           Your values (gitignored)
 ```
