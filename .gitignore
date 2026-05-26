@@ -48,3 +48,5 @@ k8s/generated-config.yaml
 # OS
 .DS_Store
 Thumbs.db
+tfplan
+tfplan-*
