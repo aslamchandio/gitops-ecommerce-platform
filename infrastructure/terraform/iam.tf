@@ -6,11 +6,17 @@ resource "google_service_account" "gke_nodes" {
 }
 
 # Minimal roles the kubelet / NAP-provisioned nodes need:
+#  - container.defaultNodeServiceAccount: the bundled role GCP now expects
+#    on every GKE node SA. Includes the individual roles below plus a few
+#    others (container.nodeServiceAgent extras). GCP surfaces a console
+#    notification if it's missing. Keeping the individual roles too as
+#    defense-in-depth and so the intent is explicit in code.
 #  - logging + monitoring writers for Cloud Ops
 #  - metadata writer so kubelet can publish node metadata
 #  - artifact registry reader so nodes can pull our images
 locals {
   gke_node_roles = [
+    "roles/container.defaultNodeServiceAccount",
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
     "roles/monitoring.viewer",
