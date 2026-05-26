@@ -1,0 +1,65 @@
+# PodMonitoring tells Google Managed Prometheus (GMP) which pods to scrape
+# and at which endpoint. GMP is enabled at the cluster level in
+# infrastructure/terraform/gke.tf (monitoring_config.managed_prometheus).
+#
+# Scraped metrics flow into Cloud Monitoring under the "prometheus_target"
+# monitored resource and can be queried via:
+#   - Cloud Monitoring → Metrics Explorer → PromQL
+#   - Grafana with the GMP datasource
+#   - `gcloud monitoring metrics list`
+#
+# Spring Boot Actuator exposes Prometheus metrics at /actuator/prometheus
+# when micrometer-registry-prometheus is on the classpath (added in each
+# service's pom.xml) and the endpoint is in management.endpoints.exposure.
+#
+# This file covers the 3 Spring Boot services. The Go catalog and Node
+# checkout services need their own metrics endpoints + PodMonitoring
+# entries — follow-up work.
+
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: ui-service
+  namespace: ecom
+  labels:
+    app: ui-service
+spec:
+  selector:
+    matchLabels:
+      app: ui-service
+  endpoints:
+    - port: 8080
+      path: /actuator/prometheus
+      interval: 30s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: cart-service
+  namespace: ecom
+  labels:
+    app: cart-service
+spec:
+  selector:
+    matchLabels:
+      app: cart-service
+  endpoints:
+    - port: 8082
+      path: /actuator/prometheus
+      interval: 30s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: order-service
+  namespace: ecom
+  labels:
+    app: order-service
+spec:
+  selector:
+    matchLabels:
+      app: order-service
+  endpoints:
+    - port: 8084
+      path: /actuator/prometheus
+      interval: 30s

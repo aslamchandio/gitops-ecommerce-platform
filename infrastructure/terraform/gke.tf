@@ -138,6 +138,22 @@ resource "google_container_cluster" "primary" {
     enabled = true
   }
 
+  # Cloud Logging + Cloud Monitoring + Managed Service for Prometheus.
+  # GMP gives us a PodMonitoring CRD; apps that expose /metrics or
+  # /actuator/prometheus get scraped automatically and their metrics
+  # land in Cloud Monitoring's Prometheus dashboard + are queryable
+  # via PromQL from Grafana with the GMP datasource.
+  logging_config {
+    enable_components = ["SYSTEM_COMPONENTS", "WORKLOADS"]
+  }
+
+  monitoring_config {
+    enable_components = ["SYSTEM_COMPONENTS"]
+    managed_prometheus {
+      enabled = true
+    }
+  }
+
   deletion_protection = false
   depends_on          = [google_project_service.enabled]
 }
