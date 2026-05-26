@@ -4,9 +4,9 @@ resource "random_password" "db_password" {
 }
 
 resource "google_sql_database_instance" "postgres" {
-  name             = var.db_instance_name
+  name             = "${local.name}-${var.db_instance_name}"
   database_version = var.db_version
-  region           = var.region
+  region           = var.gke_region
 
   settings {
     tier              = var.db_tier

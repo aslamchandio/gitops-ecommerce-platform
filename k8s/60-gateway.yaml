@@ -28,8 +28,10 @@ spec:
   gatewayClassName: gke-l7-global-external-managed
   # Pin to a reserved global IP. Managed by terraform in gateway_ip.tf.
   addresses:
+    # Name must match the prefixed google_compute_global_address.gateway in
+    # infrastructure/terraform/gateway_ip.tf — i.e. <local.name>-<var.gateway_address_name>.
     - type: NamedAddress
-      value: ecom-ip
+      value: it-prod-ecom-ip
   listeners:
     - name: http
       protocol: HTTP

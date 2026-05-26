@@ -1,29 +1,171 @@
+# =============================================================================
+# Global VPC, fanned out across every region in var.regions.
+#
+# Per-region resources (subnets, router, NAT) use for_each so adding a third
+# region is a one-line tfvars change. Single-region resources (Cloud SQL,
+# Memorystore, GKE) anchor to var.gke_region.
+#
+# Each region gets THREE subnets:
+#   <name>-gke-<region>     primary range for GKE nodes; secondary ranges
+#                           for pods + services live ONLY in the GKE region
+#   <name>-vm-<region>      primary range for normal VMs / future workloads
+#   <name>-proxy-<region>   reserved for REGIONAL_MANAGED_PROXY (regional
+#                           internal LBs / Gateways). No workloads here.
+#
+# Private services access (Cloud SQL + Redis VPC peering) is a single
+# *global* reservation — one /16 covers every region.
+# =============================================================================
+
+# ---- VPC ----
 resource "google_compute_network" "vpc" {
-  name                    = var.vpc_name
-  auto_create_subnetworks = false
-  depends_on              = [google_project_service.enabled]
+  name                            = "${local.name}-vpc"
+  auto_create_subnetworks         = false
+  routing_mode                    = "GLOBAL"
+  delete_default_routes_on_create = false
+  description                     = "VPC for ${local.name} spanning ${length(var.regions)} region(s)"
+  depends_on                      = [google_project_service.enabled]
 }
 
-resource "google_compute_subnetwork" "subnet" {
-  name                     = var.subnet_name
-  ip_cidr_range            = var.subnet_cidr
-  region                   = var.region
+# ---- GKE subnet (per region) ----
+# In var.gke_region this subnet carries two secondary IP ranges (pods +
+# services) used by GKE VPC-native networking. Other regions get a plain
+# subnet — same naming pattern so future GKE-in-other-region just flips
+# the secondary block on via tfvars.
+resource "google_compute_subnetwork" "gke" {
+  for_each = var.regions
+
+  name                     = "${local.name}-gke-${each.key}"
+  ip_cidr_range            = local.region_subnets[each.key].gke_cidr
+  region                   = each.key
   network                  = google_compute_network.vpc.id
   private_ip_google_access = true
 
-  secondary_ip_range {
-    range_name    = "pods"
-    ip_cidr_range = var.pods_cidr
+  dynamic "secondary_ip_range" {
+    for_each = (
+      each.key == var.gke_region
+      && each.value.gke_pods_cidr != null
+      && each.value.gke_services_cidr != null
+    ) ? [1] : []
+
+    content {
+      range_name    = "${local.name}-gke-pods"
+      ip_cidr_range = each.value.gke_pods_cidr
+    }
   }
-  secondary_ip_range {
-    range_name    = "services"
-    ip_cidr_range = var.services_cidr
+
+  dynamic "secondary_ip_range" {
+    for_each = (
+      each.key == var.gke_region
+      && each.value.gke_pods_cidr != null
+      && each.value.gke_services_cidr != null
+    ) ? [1] : []
+
+    content {
+      range_name    = "${local.name}-gke-services"
+      ip_cidr_range = each.value.gke_services_cidr
+    }
+  }
+
+  log_config {
+    aggregation_interval = "INTERVAL_5_SEC"
+    flow_sampling        = 0.5
+    metadata             = "INCLUDE_ALL_METADATA"
   }
 }
 
-# Reserved range for Cloud SQL & Memorystore private services access.
+# ---- Plain VM subnet (per region) ----
+# Primary range only. Use for Compute Engine instances, GCE-style workloads,
+# or anything that's not GKE nodes.
+resource "google_compute_subnetwork" "vm" {
+  for_each = var.regions
+
+  name                     = "${local.name}-vm-${each.key}"
+  ip_cidr_range            = local.region_subnets[each.key].vm_cidr
+  region                   = each.key
+  network                  = google_compute_network.vpc.id
+  private_ip_google_access = true
+
+  log_config {
+    aggregation_interval = "INTERVAL_5_SEC"
+    flow_sampling        = 0.5
+    metadata             = "INCLUDE_ALL_METADATA"
+  }
+}
+
+# ---- Proxy-only subnet (per region) ----
+# Required by regional internal HTTPS / TCP load balancers (Envoy fleet).
+# Exactly ONE proxy-only subnet per (region, VPC); GCP rejects a second.
+# Workloads cannot be placed here — this range is reserved for managed
+# proxies. role=ACTIVE means in-use (vs BACKUP during migrations).
+# Note: log_config is not supported on this subnet type.
+resource "google_compute_subnetwork" "proxy" {
+  for_each = var.regions
+
+  name          = "${local.name}-proxy-${each.key}"
+  ip_cidr_range = each.value.proxy_cidr
+  region        = each.key
+  network       = google_compute_network.vpc.id
+  purpose       = "REGIONAL_MANAGED_PROXY"
+  role          = "ACTIVE"
+}
+
+# ---- Cloud Routers + NAT (per region) ----
+# Private nodes have no external IPs. Cloud NAT gives them outbound
+# internet for image pulls, googleapis.com, OS updates. Each region needs
+# its own router + NAT (Cloud NAT is regional).
+#
+# In var.gke_region the NAT also translates the pod secondary range, so
+# pods without external IPs can reach the internet.
+resource "google_compute_router" "router" {
+  for_each = var.regions
+
+  name    = "${local.name}-router-${each.key}"
+  region  = each.key
+  network = google_compute_network.vpc.id
+}
+
+resource "google_compute_router_nat" "nat" {
+  for_each = var.regions
+
+  name                               = "${local.name}-nat-${each.key}"
+  router                             = google_compute_router.router[each.key].name
+  region                             = each.key
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+
+  # Always NAT the GKE subnet (primary + pods in the GKE region) AND the
+  # VM subnet. Proxy subnet is excluded — proxies don't egress through NAT.
+  subnetwork {
+    name = google_compute_subnetwork.gke[each.key].id
+
+    source_ip_ranges_to_nat = (
+      each.key == var.gke_region
+      && each.value.gke_pods_cidr != null
+    ) ? ["PRIMARY_IP_RANGE", "LIST_OF_SECONDARY_IP_RANGES"] : ["ALL_IP_RANGES"]
+
+    secondary_ip_range_names = (
+      each.key == var.gke_region
+      && each.value.gke_pods_cidr != null
+    ) ? ["${local.name}-gke-pods"] : []
+  }
+
+  subnetwork {
+    name                    = google_compute_subnetwork.vm[each.key].id
+    source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
+  }
+
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
+}
+
+# ---- Private services access (Cloud SQL + Memorystore) ----
+# Single global reservation — one /16 is plenty for the producer to carve
+# out the per-instance /28s it needs. Cloud SQL + Memorystore use this for
+# VPC peering to their tenant projects.
 resource "google_compute_global_address" "private_services" {
-  name          = var.private_services_range_name
+  name          = "${local.name}-${var.private_services_range_name}"
   purpose       = "VPC_PEERING"
   address_type  = "INTERNAL"
   prefix_length = var.private_services_prefix_length
@@ -35,27 +177,13 @@ resource "google_service_networking_connection" "private_vpc" {
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_services.name]
 
-  # After Cloud SQL + Memorystore are deleted, GCP's producer-tenant
-  # project still holds the peering open for a 10-30 min internal-cleanup
-  # window. Trying to delete the connection via the API during that
-  # window fails with FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION
-  # and blocks the rest of the teardown.
-  #
-  # The structural fix is two parts:
-  #   1. ABANDON so terraform doesn't make the failing API call.
-  #   2. A null_resource sibling (below) whose destroy provisioner does
-  #      the *consumer*-side VPC peering delete via gcloud — that's the
-  #      side we own. The producer-tenant connection then self-reaps
-  #      whenever GCP's cleanup catches up.
+  # See full rationale in the original network.tf:
+  # ABANDON skips the API delete that loops on
+  # FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION; the sibling
+  # null_resource severs the consumer-side peering on destroy.
   deletion_policy = "ABANDON"
 }
 
-# Destroy-time companion to google_service_networking_connection above.
-# Lives as a separate resource so the destroy provisioner can be ordered
-# correctly: this resource depends_on the connection, so on apply it's
-# created after, and on destroy it's destroyed BEFORE — which means the
-# gcloud peering delete runs while terraform still thinks the connection
-# exists, satisfying the prerequisite.
 resource "null_resource" "private_vpc_peering_cleanup" {
   triggers = {
     network = google_compute_network.vpc.name
@@ -68,27 +196,4 @@ resource "null_resource" "private_vpc_peering_cleanup" {
   }
 
   depends_on = [google_service_networking_connection.private_vpc]
-}
-
-# ---- Cloud NAT for the private GKE nodes ----
-# Private nodes have no external IP. Cloud NAT gives them outbound internet so
-# they can pull container images (DockerHub, gcr.io), reach googleapis.com,
-# fetch OS updates, etc. Inbound from the internet is still blocked.
-resource "google_compute_router" "nat_router" {
-  name    = var.nat_router_name
-  region  = var.region
-  network = google_compute_network.vpc.id
-}
-
-resource "google_compute_router_nat" "nat" {
-  name                               = var.nat_name
-  router                             = google_compute_router.nat_router.name
-  region                             = var.region
-  nat_ip_allocate_option             = "AUTO_ONLY"
-  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
-
-  log_config {
-    enable = true
-    filter = "ERRORS_ONLY"
-  }
 }

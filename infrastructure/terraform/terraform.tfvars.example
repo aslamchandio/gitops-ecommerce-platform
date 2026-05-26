@@ -1,19 +1,47 @@
 # Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
-project_id = "your-gcp-project-id"
-region     = "us-central1"
 
-# Everything else has a sensible default in variables.tf — uncomment to override.
-# cluster_name              = "ecom-standard"
-# artifact_repo             = "ecom-microservices"
-# master_authorized_networks = ["YOUR.PUBLIC.IP/32"]
-# db_tier                   = "db-f1-micro"
-# redis_memory_gb           = 1
+# ---- Project + naming prefix ----
+project_id        = "your-gcp-project-id"
+business_division = "it"     # e.g. "it", "platform", "data"
+environment_name  = "prod"   # e.g. "dev", "staging", "prod"
+# Every named resource gets the prefix "<business_division>-<environment_name>-",
+# so flipping these two values rebrands the whole stack without touching code.
+
+# ---- Regions ----
+# Two-region VPC fan-out. Add a third key to extend; remove one to collapse
+# to single-region. var.gke_region must be a key in this map.
+gke_region = "us-central1"
+
+regions = {
+  us-central1 = {
+    vpc_cidr          = "10.0.0.0/16"
+    subnet_newbits    = 8                  # /16 -> /24 subnets
+    gke_pods_cidr     = "10.16.0.0/14"     # only set in var.gke_region
+    gke_services_cidr = "10.32.0.0/20"     # only set in var.gke_region
+    proxy_cidr        = "10.0.128.0/23"    # for REGIONAL_MANAGED_PROXY
+  }
+  us-east1 = {
+    vpc_cidr       = "10.1.0.0/16"
+    subnet_newbits = 8
+    proxy_cidr     = "10.1.128.0/23"
+    # No gke_pods_cidr / gke_services_cidr -> primary subnet only.
+  }
+}
+
+# ---- Networking — global ----
+private_services_prefix_length = 16
+master_ipv4_cidr_block         = "172.16.0.0/28"
+master_authorized_networks     = ["YOUR.PUBLIC.IP/32"]
 
 # ---- GitHub Actions (Workload Identity Federation) ----
-# Required if you use .github/workflows/ci.yml. After `terraform apply`, paste
-# `terraform output github_actions_wif_provider` -> GH secret GCP_WIF_PROVIDER
-# `terraform output github_actions_sa_email`     -> GH secret GCP_SERVICE_ACCOUNT
-# github_repo            = "your-gh-org/your-repo"
-# github_wif_pool_id     = "github-pool"
-# github_wif_provider_id = "github-provider"
-# github_actions_sa_id   = "github-actions-ci"
+# After `terraform apply`, paste these outputs into
+# GitHub -> Settings -> Secrets and variables -> Actions:
+#   github_actions_wif_provider  -> secret GCP_WIF_PROVIDER
+#   github_actions_sa_email      -> secret GCP_SERVICE_ACCOUNT
+github_repo            = "your-gh-org/your-repo"
+github_wif_pool_id     = "github-pool"
+github_wif_provider_id = "github-provider"
+github_actions_sa_id   = "github-actions-ci"
+
+# Everything else has explicit values in terraform.tfvars — copy that file
+# rather than this one if you want the full set.

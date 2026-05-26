@@ -5,44 +5,55 @@
 # silently picking up a hardcoded fallback.
 # =============================================================================
 
-# ---- Project + region ----
+# ---- Project + naming ----
 variable "project_id" {
   type        = string
   description = "GCP project ID where everything is provisioned."
 }
 
-variable "region" {
+variable "business_division" {
   type        = string
-  description = "Primary region — pick one close to your users."
+  description = "Owner / team — e.g. 'it', 'platform'. Used as a naming prefix."
+}
+
+variable "environment_name" {
+  type        = string
+  description = "Environment — e.g. 'dev', 'staging', 'prod'. Combined with business_division to prefix every resource name."
+}
+
+# ---- Region selection ----
+# Single-region resources (Cloud SQL, Redis, GKE, ArgoCD) live in gke_region.
+# The VPC fans out across every key in var.regions; only gke_region gets the
+# GKE secondary ranges and the cluster itself.
+variable "gke_region" {
+  type        = string
+  description = "Primary region that hosts the GKE cluster and the regional data plane. Must be a key in var.regions."
+}
+
+variable "regions" {
+  description = "Map of GCP region -> per-region network config. Two keys = two-region VPC fan-out. The cluster + data plane only sit in var.gke_region; other regions just get a subnet trio (gke/vm/proxy) wired into the same VPC for future workloads."
+  type = map(object({
+    vpc_cidr          = string                # /16 sliced into gke + vm subnets via cidrsubnet
+    subnet_newbits    = number                # how many bits to add when slicing vpc_cidr (8 -> /24s from /16)
+    gke_pods_cidr     = optional(string)      # only set for var.gke_region
+    gke_services_cidr = optional(string)      # only set for var.gke_region
+    proxy_cidr        = string                # /23+ for REGIONAL_MANAGED_PROXY (regional internal LB)
+  }))
 }
 
 # ---- Naming ----
 variable "cluster_name" {
-  type = string
+  type        = string
+  description = "Suffix appended after the <biz>-<env>- prefix to form the cluster name (e.g. 'standard' -> 'it-prod-standard')."
 }
 
 variable "artifact_repo" {
   type = string
 }
 
-variable "vpc_name" {
-  type = string
-}
-
-variable "subnet_name" {
-  type = string
-}
-
-variable "nat_router_name" {
-  type = string
-}
-
-variable "nat_name" {
-  type = string
-}
-
 variable "private_services_range_name" {
-  type = string
+  type        = string
+  description = "Name of the reserved /16 used for Cloud SQL + Memorystore private services access (a single global range covers all regions)."
 }
 
 variable "system_pool_name" {
@@ -82,26 +93,17 @@ variable "gateway_address_name" {
 }
 
 # ---- Networking — CIDRs ----
-variable "subnet_cidr" {
-  type = string
-}
-
-variable "pods_cidr" {
-  type = string
-}
-
-variable "services_cidr" {
-  type = string
-}
+# Per-region subnet/secondary CIDRs now live in var.regions (declared above).
+# Only the cross-region / global ranges stay top-level here.
 
 variable "private_services_prefix_length" {
   type        = number
-  description = "Prefix length for the reserved range used by Cloud SQL & Memorystore private services access."
+  description = "Prefix length for the reserved global range used by Cloud SQL & Memorystore private services access. /16 = 65k addresses, plenty of headroom."
 }
 
 variable "master_ipv4_cidr_block" {
   type        = string
-  description = "/28 used by the GKE control plane in the peered VPC. Must not overlap any subnet."
+  description = "/28 used by the GKE control plane in the peered VPC. Must not overlap any subnet primary or secondary range."
 }
 
 variable "master_authorized_networks" {

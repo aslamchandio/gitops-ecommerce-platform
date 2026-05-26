@@ -34,7 +34,7 @@ terraform {
 
 provider "google" {
   project = var.project_id
-  region  = var.region
+  region  = var.gke_region # default region for region-scoped operations
 }
 
 # Fetch a short-lived OAuth token for the current gcloud identity. The helm

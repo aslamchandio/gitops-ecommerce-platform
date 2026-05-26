@@ -13,7 +13,7 @@ output "kubectl_connect_command" {
 
 output "artifact_registry_url" {
   description = "Base path for docker tags. Append /<service>:<tag>."
-  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.images.repository_id}"
+  value       = "${var.gke_region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.images.repository_id}"
 }
 
 output "postgres_private_ip" {

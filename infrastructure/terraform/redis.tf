@@ -1,8 +1,8 @@
 resource "google_redis_instance" "cart" {
-  name           = var.redis_instance_name
+  name           = "${local.name}-${var.redis_instance_name}"
   tier           = var.redis_tier
   memory_size_gb = var.redis_memory_gb
-  region         = var.region
+  region         = var.gke_region
 
   authorized_network      = google_compute_network.vpc.id
   connect_mode            = "PRIVATE_SERVICE_ACCESS"

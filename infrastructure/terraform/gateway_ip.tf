@@ -10,7 +10,10 @@
 #   terraform import google_compute_global_address.gateway \
 #     projects/${var.project_id}/global/addresses/${var.gateway_address_name}
 resource "google_compute_global_address" "gateway" {
-  name         = var.gateway_address_name
+  # k8s/60-gateway.yaml references this address BY NAME, so the prefixed
+  # value here must match the `spec.addresses[].value` in that manifest
+  # (currently "it-prod-ecom-ip" after the naming refactor).
+  name         = "${local.name}-${var.gateway_address_name}"
   address_type = "EXTERNAL"
   ip_version   = "IPV4"
   # NOTE: do NOT set `description` — it's immutable on existing addresses

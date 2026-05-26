@@ -6,29 +6,24 @@
 #  - ComputeClass for app workloads is defined in k8s/05-compute-class.yaml,
 #    which targets Spot VMs with on-demand fallback.
 
-# Discover the zones available in var.region so NAP and the system pool don't
-# need a hardcoded zone list. Flipping var.region re-derives the right zones
-# automatically; a new zone added to the region by GCP is picked up on next
-# `terraform apply`.
-data "google_compute_zones" "available" {
-  region = var.region
-  status = "UP"
-}
+# Zone list now comes from the project-wide datasource (datasource.tf), keyed
+# by region. Cluster sits in var.gke_region; NAP locations come from that
+# region's zone slice in local.region_zones.
 
 resource "google_container_cluster" "primary" {
-  name     = var.cluster_name
-  location = var.region # regional control plane = HA
+  name     = local.gke_cluster_name # e.g. "it-prod-standard"
+  location = var.gke_region         # regional control plane = HA
 
   # We replace the default pool with our own minimal system pool below.
   remove_default_node_pool = true
   initial_node_count       = 1
 
   network    = google_compute_network.vpc.id
-  subnetwork = google_compute_subnetwork.subnet.id
+  subnetwork = google_compute_subnetwork.gke[var.gke_region].id
 
   ip_allocation_policy {
-    cluster_secondary_range_name  = "pods"
-    services_secondary_range_name = "services"
+    cluster_secondary_range_name  = "${local.name}-gke-pods"
+    services_secondary_range_name = "${local.name}-gke-services"
   }
 
   # ---- Private cluster ----
@@ -102,11 +97,11 @@ resource "google_container_cluster" "primary" {
       maximum       = var.nap_memory_limit_gb
     }
 
-    # Restrict NAP to the zones the region exposes today. Authoritative for
-    # ALL ComputeClass-driven node creation in this cluster — the k8s
+    # Restrict NAP to the zones the GKE region exposes today. Authoritative
+    # for ALL ComputeClass-driven node creation in this cluster — the k8s
     # ComputeClass intentionally omits its own location.zones so it inherits
     # from here (single source of truth).
-    auto_provisioning_locations = data.google_compute_zones.available.names
+    auto_provisioning_locations = data.google_compute_zones.available[var.gke_region].names
 
     auto_provisioning_defaults {
       service_account = google_service_account.gke_nodes.email

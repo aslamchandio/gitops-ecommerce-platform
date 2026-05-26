@@ -1,7 +1,7 @@
 resource "google_artifact_registry_repository" "images" {
-  location      = var.region
+  location      = var.gke_region
   repository_id = var.artifact_repo
-  description   = "Docker images for the ecom microservices"
+  description   = "Docker images for ${local.name}"
   format        = "DOCKER"
 
   cleanup_policies {
