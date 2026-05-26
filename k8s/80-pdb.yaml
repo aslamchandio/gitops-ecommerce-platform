@@ -21,7 +21,8 @@ metadata:
 spec:
   maxUnavailable: 1
   selector:
-    matchLabels: { app: catalog-service }
+    matchLabels:
+      app: catalog-service
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -31,7 +32,8 @@ metadata:
 spec:
   maxUnavailable: 1
   selector:
-    matchLabels: { app: cart-service }
+    matchLabels:
+      app: cart-service
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -41,7 +43,8 @@ metadata:
 spec:
   maxUnavailable: 1
   selector:
-    matchLabels: { app: checkout-service }
+    matchLabels:
+      app: checkout-service
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -51,7 +54,8 @@ metadata:
 spec:
   maxUnavailable: 1
   selector:
-    matchLabels: { app: order-service }
+    matchLabels:
+      app: order-service
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -61,4 +65,5 @@ metadata:
 spec:
   maxUnavailable: 1
   selector:
-    matchLabels: { app: ui-service }
+    matchLabels:
+      app: ui-service

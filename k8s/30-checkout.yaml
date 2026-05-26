@@ -3,14 +3,17 @@ kind: Deployment
 metadata:
   name: checkout-service
   namespace: ecom
-  labels: { app: checkout-service }
+  labels:
+    app: checkout-service
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: checkout-service }
+    matchLabels:
+      app: checkout-service
   template:
     metadata:
-      labels: { app: checkout-service }
+      labels:
+        app: checkout-service
     spec:
       nodeSelector:
         cloud.google.com/compute-class: ecom-spot
@@ -27,12 +30,14 @@ spec:
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
-            matchLabels: { app: checkout-service }
+            matchLabels:
+              app: checkout-service
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
-            matchLabels: { app: checkout-service }
+            matchLabels:
+              app: checkout-service
       containers:
         - name: checkout
           image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/checkout-service:46b483c
@@ -46,13 +51,21 @@ spec:
             - name: ORDER_SERVICE_URL
               value: "http://order-service:8084"
           resources:
-            requests: { cpu: 50m, memory: 96Mi }
-            limits:   { cpu: 250m, memory: 192Mi }
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 250m
+              memory: 192Mi
           readinessProbe:
-            httpGet: { path: /health, port: 8083 }
+            httpGet:
+              path: /health
+              port: 8083
             initialDelaySeconds: 5
           livenessProbe:
-            httpGet: { path: /health, port: 8083 }
+            httpGet:
+              path: /health
+              port: 8083
             initialDelaySeconds: 15
 ---
 apiVersion: v1
@@ -61,7 +74,8 @@ metadata:
   name: checkout-service
   namespace: ecom
 spec:
-  selector: { app: checkout-service }
+  selector:
+    app: checkout-service
   ports:
     - port: 8083
       targetPort: 8083

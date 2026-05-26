@@ -3,14 +3,17 @@ kind: Deployment
 metadata:
   name: cart-service
   namespace: ecom
-  labels: { app: cart-service }
+  labels:
+    app: cart-service
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: cart-service }
+    matchLabels:
+      app: cart-service
   template:
     metadata:
-      labels: { app: cart-service }
+      labels:
+        app: cart-service
     spec:
       nodeSelector:
         cloud.google.com/compute-class: ecom-spot
@@ -27,12 +30,14 @@ spec:
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
-            matchLabels: { app: cart-service }
+            matchLabels:
+              app: cart-service
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
-            matchLabels: { app: cart-service }
+            matchLabels:
+              app: cart-service
       containers:
         - name: cart
           image: us-central1-docker.pkg.dev/terraform-project-883456/ecom-microservices/cart-service:46b483c
@@ -40,21 +45,35 @@ spec:
             - containerPort: 8082
           env:
             - name: SPRING_REDIS_HOST
-              valueFrom: { configMapKeyRef: { name: ecom-redis-config, key: REDIS_HOST } }
+              valueFrom:
+                configMapKeyRef:
+                  name: ecom-redis-config
+                  key: REDIS_HOST
             - name: SPRING_REDIS_PORT
-              valueFrom: { configMapKeyRef: { name: ecom-redis-config, key: REDIS_PORT } }
+              valueFrom:
+                configMapKeyRef:
+                  name: ecom-redis-config
+                  key: REDIS_PORT
             - name: SERVER_PORT
               value: "8082"
             - name: CATALOG_SERVICE_URL
               value: "http://catalog-service:8081"
           resources:
-            requests: { cpu: 200m, memory: 384Mi }
-            limits:   { cpu: 500m, memory: 512Mi }
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           readinessProbe:
-            httpGet: { path: /actuator/health/readiness, port: 8082 }
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8082
             initialDelaySeconds: 30
           livenessProbe:
-            httpGet: { path: /actuator/health/liveness, port: 8082 }
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8082
             initialDelaySeconds: 60
 ---
 apiVersion: v1
@@ -63,7 +82,8 @@ metadata:
   name: cart-service
   namespace: ecom
 spec:
-  selector: { app: cart-service }
+  selector:
+    app: cart-service
   ports:
     - port: 8082
       targetPort: 8082
