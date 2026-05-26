@@ -45,6 +45,22 @@ resource "google_container_cluster" "primary" {
     }
   }
 
+  # ---- Control plane DNS endpoint ----
+  # Enables the DNS-based control plane endpoint
+  # (gke-<id>-<project>.<region>.gke.goog) in addition to the IP endpoint.
+  # The DNS endpoint is gated by IAM (roles/container.viewer or higher)
+  # instead of master_authorized_networks CIDR allowlists — handy when
+  # connecting from a laptop with a dynamic IP, CI runners, or anywhere
+  # the source IP can't be pinned. Get a kubeconfig with it via:
+  #
+  #   gcloud container clusters get-credentials <cluster> \
+  #     --region <region> --dns-endpoint
+  control_plane_endpoints_config {
+    dns_endpoint_config {
+      allow_external_traffic = true
+    }
+  }
+
   master_authorized_networks_config {
     dynamic "cidr_blocks" {
       for_each = var.master_authorized_networks
