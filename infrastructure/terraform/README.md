@@ -2,13 +2,15 @@
 
 Provisions every piece of GCP infrastructure the project depends on: network, GKE cluster, data plane, image registry, TLS, ArgoCD, and the keyless CI identity. After `terraform apply`, the only manual step is pasting two outputs into GitHub Actions secrets — everything else is GitOps from there.
 
+Every named resource is prefixed `<business_division>-<environment_name>-` (e.g. `it-prod-vpc`, `it-prod-standard`, `it-prod-ecom-postgres`). Flipping those two tfvars rebrands the whole stack without code changes. See [Naming convention + multi-region network](#naming-convention--multi-region-network) below for the details.
+
 ---
 
 ## What this provisions
 
 | Layer            | Resources                                                                                 | File                                              |
 |------------------|--------------------------------------------------------------------------------------------|---------------------------------------------------|
-| Network          | VPC + subnet + Cloud NAT + private services access (private IPs for SQL/Redis)              | [`network.tf`](network.tf)                        |
+| Network          | Global VPC fanned out across every key in `var.regions`. Per region: optional `gke` / `vm` / `proxy` subnets + Cloud Router + Cloud NAT. Single global reservation pinned via `var.private_services_address` for Cloud SQL + Memorystore peering. | [`network.tf`](network.tf), [`locals.tf`](locals.tf), [`datasource.tf`](datasource.tf) |
 | Compute          | GKE Standard regional cluster (3 zones) · minimal system pool · Node Auto-Provisioning · Gateway API enabled · **GMP enabled with 9 scrape components** | [`gke.tf`](gke.tf)                                |
 | Data             | Cloud SQL Postgres (private, `max_connections=75` via `database_flags`) · Memorystore Redis (basic, private) | [`cloudsql.tf`](cloudsql.tf), [`redis.tf`](redis.tf) |
 | Secrets          | Generated DB password (random_password) · GSM secret entry · K8s Secret + ConfigMap        | [`secrets.tf`](secrets.tf), [`secret_manager.tf`](secret_manager.tf) |
@@ -20,6 +22,120 @@ Provisions every piece of GCP infrastructure the project depends on: network, GK
 | Keyless CI       | Workload Identity Federation pool + GitHub OIDC provider · SA scoped to AR writer only     | [`github_oidc.tf`](github_oidc.tf)                |
 | Observability    | GSA `grafana-gmp-reader` (`roles/monitoring.viewer`) + WI binding for in-cluster Grafana proxy KSA | [`grafana.tf`](grafana.tf)                        |
 | API enablement   | All required GCP APIs enabled before dependents are created                                | [`apis.tf`](apis.tf)                              |
+
+---
+
+## Naming convention + multi-region network
+
+### Naming
+
+Two top-level variables drive every resource name:
+
+```hcl
+business_division = "it"     # naming prefix part 1
+environment_name  = "prod"   # naming prefix part 2
+```
+
+[`locals.tf`](locals.tf) joins them into `local.name = "<biz>-<env>"`. Every named resource interpolates it:
+
+```
+it-prod-vpc                     it-prod-gke-us-central1
+it-prod-standard                it-prod-ecom-postgres
+it-prod-router-us-west1         it-prod-private-services
+```
+
+Spin a parallel `staging` stack by copying `terraform.tfvars`, changing `environment_name = "staging"` (plus the GCS state prefix and a non-overlapping CIDR layout), and `terraform apply`. The whole resource graph re-prefixes itself.
+
+### Multi-region network
+
+`var.regions` is a map(object) — one entry per GCP region. Add a key to expand the VPC into a new region; remove one to collapse. The cluster and data plane anchor to whichever key is in `var.gke_region`.
+
+```hcl
+# variables.tf (schema)
+variable "regions" {
+  type = map(object({
+    vpc_cidr          = string                # /16 sliced into primary ranges via cidrsubnet
+    subnet_newbits    = number                # 8 -> /24, 4 -> /20
+    gke_pods_cidr     = optional(string)
+    gke_services_cidr = optional(string)
+    vm_subnet         = optional(bool, false)
+    proxy_cidr        = optional(string)
+  }))
+}
+```
+
+Each subnet type is **independently opt-in** — a region only carries the subnets it actually needs:
+
+| Subnet | Created when | Purpose |
+|---|---|---|
+| `<name>-gke-<region>` | both `gke_pods_cidr` + `gke_services_cidr` are set | GKE node subnet. Secondary pods + services ranges attach only in `var.gke_region`. |
+| `<name>-vm-<region>` | `vm_subnet = true` | Plain Compute Engine / non-GKE workloads. |
+| `<name>-proxy-<region>` | `proxy_cidr` is set | Reserved `REGIONAL_MANAGED_PROXY` slot for regional internal LB / Gateway envoys. |
+
+Routers + Cloud NATs are created per region only when at least one egress-eligible subnet (gke or vm) exists there. The NAT uses dynamic `subnetwork` blocks so it attaches only the subnets actually present.
+
+### CIDR slicing via `cidrsubnet`
+
+[`locals.tf`](locals.tf) carves each region's `vpc_cidr` into primary ranges:
+
+```hcl
+gke_cidr = cidrsubnet(cfg.vpc_cidr, cfg.subnet_newbits, 1)   # position 1
+vm_cidr  = cidrsubnet(cfg.vpc_cidr, cfg.subnet_newbits, 2)   # position 2
+```
+
+`proxy_cidr`, `gke_pods_cidr`, `gke_services_cidr` are passed in explicitly because they have size/positioning constraints that don't slice cleanly (`REGIONAL_MANAGED_PROXY` needs /23+, secondary ranges are typically much larger than the primary).
+
+### Example layout (current `terraform.tfvars`)
+
+```hcl
+business_division = "it"
+environment_name  = "prod"
+gke_region        = "us-central1"
+
+regions = {
+  us-central1 = {
+    vpc_cidr          = "192.168.0.0/16"
+    subnet_newbits    = 4                 # /16 -> /20 subnets
+    gke_pods_cidr     = "10.244.0.0/14"   # 262k pod IPs
+    gke_services_cidr = "10.32.0.0/20"
+    # No vm_subnet, no proxy_cidr -> only the gke subnet here
+  }
+  us-west1 = {
+    vpc_cidr       = "172.26.0.0/16"
+    subnet_newbits = 8                    # /16 -> /24 subnets
+    vm_subnet      = true                 # only the vm subnet here
+  }
+}
+
+private_services_address       = "10.77.0.0"   # pinned so SQL + Redis peering is deterministic
+private_services_prefix_length = 16
+```
+
+That produces:
+
+| Subnet | Region | CIDR | Notes |
+|---|---|---|---|
+| `it-prod-gke-us-central1` | us-central1 | `192.168.16.0/20` | + secondaries `10.244.0.0/14` (pods) + `10.32.0.0/20` (services) |
+| `it-prod-vm-us-west1` | us-west1 | `172.26.2.0/24` | — |
+
+Plus Cloud Router + Cloud NAT in each region, and a single global reservation `it-prod-private-services` (`10.77.0.0/16`) for Cloud SQL + Memorystore VPC peering.
+
+### CIDR allocation map (current)
+
+```
+10.32.0.0/20     GKE services secondary  (cluster-internal Services)
+10.77.0.0/16     Private services peering (Cloud SQL + Redis tenant project)
+10.244.0.0/14    GKE pods secondary
+
+172.16.0.0/28    GKE control plane master peering
+172.26.2.0/24    us-west1 VM subnet primary
+
+192.168.16.0/20  us-central1 GKE node primary
+192.168.0.0/16   us-central1 VPC parent (sliced into /20s)
+172.26.0.0/16    us-west1 VPC parent     (sliced into /24s)
+```
+
+Zero overlaps. Pin `private_services_address` instead of letting GCP auto-allocate so the range stays the same across rebuilds.
 
 ---
 
@@ -298,23 +414,25 @@ The producer tenant connection self-reaps once both sides are severed; you don't
 ```
 infrastructure/terraform/
 ├── apis.tf                    GCP API enablement (gate for all dependent resources)
-├── network.tf                 VPC, subnet, Cloud NAT, private services access
-├── gke.tf                     GKE cluster + system pool + NAP + Gateway API
-├── cloudsql.tf                Cloud SQL Postgres + 2 databases
+├── network.tf                 VPC + per-region gke/vm/proxy subnets + per-region Cloud Router/NAT + private services peering
+├── locals.tf                  local.name = <biz>-<env>; cidrsubnet slicing per region; zone slices
+├── datasource.tf              google_compute_zones for_each over var.regions (zone discovery)
+├── gke.tf                     GKE cluster (on gke[var.gke_region]) + system pool + NAP + Gateway API + GMP components
+├── cloudsql.tf                Cloud SQL Postgres + 2 databases + user (ABANDON deletion policies)
 ├── redis.tf                   Memorystore Redis (basic, private)
-├── artifact_registry.tf       AR repo + cleanup policy
-├── gateway_ip.tf              Reserved global LB IP
+├── artifact_registry.tf       AR repo + cleanup policy (in var.gke_region)
+├── gateway_ip.tf              Reserved global LB IP (name follows the prefix → it-prod-ecom-ip)
 ├── cert_map.tf                Cert Manager certificate + CertificateMap binding
 ├── iam.tf                     GKE node SA + workload SA + WI binding
 ├── argocd.tf                  Helm release of argo-cd chart (LB exposed, source-range locked)
-├── argocd_application.tf      The "ecom" Application CR pointing at k8s/
+├── argocd_application.tf      The "ecom" Application CR + time_sleep.argocd_cascade_grace
 ├── github_oidc.tf             WIF pool + provider + repo-scoped service account
 ├── grafana.tf                 GSA + WI binding for the in-cluster GMP query proxy (Grafana auth)
 ├── secrets.tf                 Generated DB password + K8s Secret
 ├── secret_manager.tf          GSM secret entries (workload-identity readable)
-├── variables.tf               Declarations only (no defaults — fail fast)
+├── variables.tf               business_division, environment_name, regions(map), gke_region, etc.
 ├── outputs.tf                 Cluster name, gateway IP, WIF outputs, etc.
-├── versions.tf                Terraform + provider version pins
+├── versions.tf                Terraform + provider version pins (incl. hashicorp/time)
 ├── backend.tf                 GCS remote state config (prefix: prod/c1-ecommerce-project)
 ├── terraform.tfvars.example   Template — copy to terraform.tfvars and fill in
 └── terraform.tfvars           Your values (gitignored)

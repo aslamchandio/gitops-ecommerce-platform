@@ -41,6 +41,14 @@ To roll back, `git revert <bump-commit>` and ArgoCD re-applies the previous immu
 
 ---
 
+## Cross-references that follow the terraform naming prefix
+
+The Gateway in [`60-gateway.yaml`](60-gateway.yaml) references the reserved global IP **by name** under `spec.addresses[].value`. That name follows the `<business_division>-<environment_name>-` prefix set in terraform — currently **`it-prod-ecom-ip`**. If you change `business_division` or `environment_name` in tfvars (or change `gateway_address_name`), update that YAML field to match, otherwise the Gateway controller can't resolve the address and the LB never provisions.
+
+The same applies to anything else in `k8s/` that references a terraform-named resource by literal name. As of today there's only the gateway IP — keep this list current if more are added.
+
+---
+
 ## ArgoCD sync semantics
 
 The Application is configured for **full GitOps**:

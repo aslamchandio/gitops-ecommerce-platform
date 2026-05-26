@@ -14,6 +14,7 @@ A polyglot microservices storefront that ingests products from the public [FakeS
 - **SHA-pinned releases** — every release pins immutable image digests in `k8s/*.yaml`; rollback is `git revert`.
 - **Three-layer cache enforcement** — Spring filter + GKE Gateway `ResponseHeaderModifier` + CI smoke test, so a UI deploy is **instantly visible** to every user without browser tricks.
 - **In-cluster observability** — Google Managed Prometheus scrapes every service's `/actuator/prometheus` + cAdvisor + kube-state-metrics; Grafana runs in-cluster, queries GMP via a Workload-Identity-authed proxy (no GCP creds in Grafana), ships a starter Spring Boot dashboard + the [grafana.com/15661](https://grafana.com/grafana/dashboards/15661) K8s dashboard pre-loaded.
+- **Multi-region-ready VPC, single-knob naming** — Every named resource is prefixed `<business_division>-<environment_name>-` (e.g. `it-prod-vpc`) from `local.name` so two tfvars flips rebrand the whole stack. `var.regions` is a `map(object)` — current layout fans out across `us-central1` (GKE) + `us-west1` (VMs); add a third region with one map entry. Each region's `gke` / `vm` / `proxy` subnets are independently opt-in; CIDR primaries are sliced from the per-region `vpc_cidr` via `cidrsubnet`.
 - **Spot-first economics** — GKE `ComputeClass` prefers Spot VMs with on-demand fallback (~70% cheaper).
 - **Resilient under Spot preemption** — every service runs at `minReplicas=2` with `topologySpreadConstraints` (hostname + zone). A single node preemption never takes a service to zero; load balancer stays healthy.
 - **Private data plane** — Cloud SQL Postgres and Memorystore Redis on a VPC with no public IPs, tuned for the replica fan-out (`max_connections=75`, HikariCP capped per pod).
@@ -79,8 +80,8 @@ This provisions:
 
 | Layer              | Resource                                                                 |
 |--------------------|--------------------------------------------------------------------------|
-| Network            | VPC + subnet + Cloud NAT + private services access                        |
-| Compute            | GKE Standard regional cluster (3 zones, system pool + NAP)                |
+| Network            | Global VPC fanned out across every key in `var.regions` (currently 2: `us-central1` + `us-west1`). Per region: opt-in `gke` / `vm` / `proxy` subnets via `cidrsubnet` slicing; Cloud Router + NAT only where needed. Single pinned `private_services_address` for SQL + Redis peering. |
+| Compute            | GKE Standard regional cluster in `var.gke_region` (3 zones, system pool + NAP) |
 | Data               | Cloud SQL Postgres (private) · Memorystore Redis (basic)                  |
 | Image registry     | Artifact Registry `ecom-microservices`                                    |
 | Ingress            | Reserved global IP · Cert Manager certificate + CertificateMap            |
