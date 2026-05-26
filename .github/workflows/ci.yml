@@ -88,12 +88,18 @@ jobs:
             | jq -er .value > "$OIDC_FILE"
 
           # 2. Write the WIF credentials JSON that gcloud understands.
+          #    NOTE: the audience here is the STS audience —
+          #    "//iam.googleapis.com/..." (leading // and no https) — which
+          #    is different from the OIDC `aud` claim fetched in step 1
+          #    ("https://iam.googleapis.com/..."). Both forms reference the
+          #    same provider; STS specifically rejects the https:// form
+          #    with "Invalid value for audience" if you mix them up.
           CRED_FILE="$(mktemp --suffix=.json)"
           chmod 600 "$CRED_FILE"
           cat > "$CRED_FILE" <<EOF
           {
             "type": "external_account",
-            "audience": "https://iam.googleapis.com/${WIF_PROVIDER}",
+            "audience": "//iam.googleapis.com/${WIF_PROVIDER}",
             "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
             "token_url": "https://sts.googleapis.com/v1/token",
             "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA_EMAIL}:generateAccessToken",
