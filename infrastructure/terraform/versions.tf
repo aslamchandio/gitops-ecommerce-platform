@@ -1,14 +1,8 @@
 terraform {
   required_version = ">= 1.6"
 
-  # Remote state on GCS — single shared source of truth, versioned so a bad
-  # apply can be rolled back, locked by Cloud Storage's object generation
-  # so two `terraform apply`s can't race. The "prod" prefix leaves room to
-  # add additional environments (e.g. "staging") under the same bucket.
-  backend "gcs" {
-    bucket = "aslam-terraform-bucket"
-    prefix = "prod"
-  }
+  # Backend config lives in backend.tf (environment-specific, separated so
+  # multi-env or wrapper-tool changes don't touch this file).
 
   required_providers {
     google = {

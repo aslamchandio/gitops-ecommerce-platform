@@ -93,9 +93,11 @@ Prerequisites: a GCP project, billing enabled, `terraform`, `gcloud`, and `kubec
 ```bash
 cd infrastructure/terraform
 cp terraform.tfvars.example terraform.tfvars   # edit project_id, domain, etc.
-terraform init
+terraform init                                  # connects to GCS remote state
 terraform apply
 ```
+
+State is stored remotely in `gs://aslam-terraform-bucket/prod/ecommerce-project/` ([`backend.tf`](infrastructure/terraform/backend.tf)) — no local `.tfstate` file. Bucket has versioning enabled so any apply can be rolled back. New contributors just need `gcloud auth application-default login` + `terraform init`; no state file sharing required.
 
 This provisions:
 

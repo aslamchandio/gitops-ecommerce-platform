@@ -35,9 +35,11 @@ cp terraform.tfvars.example terraform.tfvars
 ### 2. Apply
 
 ```bash
-terraform init
+terraform init        # connects to the GCS backend (see backend.tf)
 terraform apply
 ```
+
+State lives in `gs://aslam-terraform-bucket/prod/ecommerce-project/` (see [`backend.tf`](backend.tf)). `terraform init` pulls the existing state from there — no local `.tfstate` file is created. Bucket has versioning enabled so a bad apply can be rolled back via object generation history.
 
 Takes ~15 minutes the first time (GKE cluster + Cloud SQL are the slow ones). The apply will:
 
@@ -176,6 +178,22 @@ needed_max ≈ Σ(svc.replicas × svc.hikari_pool) + go_pool + probes(~5) + rese
 
 For db-f1-micro (0.6GB RAM), don't exceed ~100 — connections consume memory and the instance will start swapping.
 
+### Remote state
+
+State lives in `gs://aslam-terraform-bucket/prod/ecommerce-project/default.tfstate`. The bucket has versioning enabled, so each `terraform apply` creates a new object generation:
+
+```bash
+# List historical state versions
+gcloud storage ls -a gs://aslam-terraform-bucket/prod/ecommerce-project/default.tfstate
+
+# Roll back to a specific generation
+gcloud storage cp \
+  gs://aslam-terraform-bucket/prod/ecommerce-project/default.tfstate#<generation> \
+  gs://aslam-terraform-bucket/prod/ecommerce-project/default.tfstate
+```
+
+To add a new environment under the same bucket, copy [`backend.tf`](backend.tf) to a new module directory with a different prefix (e.g. `staging/ecommerce-project`).
+
 ### Destroy everything
 
 ```bash
@@ -207,6 +225,7 @@ infrastructure/terraform/
 ├── variables.tf               Declarations only (no defaults — fail fast)
 ├── outputs.tf                 Cluster name, gateway IP, WIF outputs, etc.
 ├── versions.tf                Terraform + provider version pins
+├── backend.tf                 GCS remote state config (prod/ecommerce-project)
 ├── terraform.tfvars.example   Template — copy to terraform.tfvars and fill in
 └── terraform.tfvars           Your values (gitignored)
 ```
