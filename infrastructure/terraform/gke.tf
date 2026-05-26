@@ -148,7 +148,33 @@ resource "google_container_cluster" "primary" {
   }
 
   monitoring_config {
-    enable_components = ["SYSTEM_COMPONENTS"]
+    # SYSTEM_COMPONENTS alone only emits the legacy Cloud Monitoring
+    # system metrics (kubernetes.io/container/cpu/... family). The
+    # PromQL-style families that community dashboards expect
+    # (container_*, kube_*, kubelet_volume_stats_*) come from these
+    # additional managed scrape components — each tells GMP to scrape
+    # and ingest a specific source under standard Prometheus names:
+    #   CADVISOR   → container_cpu_*, container_memory_*, container_fs_*,
+    #                container_network_*
+    #   KUBELET    → kubelet_running_pods, kubelet_runtime_operations,…
+    #   STORAGE    → kubelet_volume_stats_* (PVC capacity / free)
+    #   POD        → kube_pod_*
+    #   DEPLOYMENT → kube_deployment_*
+    #   STATEFULSET, DAEMONSET, HPA → matching kube_* families
+    # Cost: each ingested sample bills under Cloud Monitoring; first
+    # 250M samples/month per project are free, so a small cluster like
+    # this stays in the free tier comfortably.
+    enable_components = [
+      "SYSTEM_COMPONENTS",
+      "CADVISOR",
+      "KUBELET",
+      "STORAGE",
+      "POD",
+      "DEPLOYMENT",
+      "STATEFULSET",
+      "DAEMONSET",
+      "HPA",
+    ]
     managed_prometheus {
       enabled = true
     }

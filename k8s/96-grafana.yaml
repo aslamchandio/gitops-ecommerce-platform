@@ -274,8 +274,16 @@ spec:
           configMap:
             name: grafana-dashboard-provider
         - name: dashboards
-          configMap:
-            name: grafana-dashboards
+          # Projected volume so we can land *.json files from multiple
+          # ConfigMaps into the same provisioning directory. Add another
+          # `configMap:` entry here for each new dashboard ConfigMap (e.g.
+          # the K8s dashboard in 97-grafana-dashboard-k8s.yaml).
+          projected:
+            sources:
+              - configMap:
+                  name: grafana-dashboards
+              - configMap:
+                  name: grafana-dashboards-k8s
 
 ---
 # ClusterIP — port-forward access only, never exposed via Gateway.
