@@ -23,34 +23,9 @@ A polyglot microservices storefront that ingests products from the public [FakeS
 
 ## Architecture
 
-```
-                          ┌──────────────────────────┐
-                          │  Gateway (gke-l7-glb) +  │  shop.nativeops.site
-                          │  Cert Manager (HTTPS)    │  → :443 ResponseHeader
-                          └────────────┬─────────────┘    Cache-Control
-                                       │
-                          ┌────────────▼─────────────┐
-                          │   UI Service (Spring)    │  Thymeleaf, dark/light,
-                          │   8080 · stateless       │  WebMvcConfig filter
-                          └────┬─────────┬────────┬──┘
-                ┌──────────────┘         │        └──────────────┐
-                ▼                        ▼                       ▼
-       ┌─────────────────┐     ┌──────────────────┐    ┌──────────────────┐
-       │ Catalog (Go)    │     │  Cart (Spring)   │    │ Checkout (Node)  │
-       │ + FakeStore     │     │  + Redis         │    │ orchestrates     │
-       │   cron sync 6h  │     │                  │    │ cart → order     │
-       └────────┬────────┘     └────────┬─────────┘    └────────┬─────────┘
-                │                       │                       │
-                ▼                       ▼                       ▼
-       ┌──────────────┐          ┌──────────────┐      ┌──────────────────┐
-       │ Cloud SQL    │          │ Memorystore  │      │ Order (Spring)   │
-       │ Postgres     │          │ Redis        │      │ + Cloud SQL      │
-       │ "catalog"    │          │              │      │ "orders"         │
-       └──────────────┘          └──────────────┘      └──────────────────┘
+![System architecture](docs/images/architecture.png)
 
-VPC: private services access; no public IPs on data plane.
-GitOps: ArgoCD watches main:k8s/  →  syncs to ecom namespace.
-```
+*VPC with private services access (no public IPs on the data plane). ArgoCD watches `main:k8s/` and syncs to the `ecom` namespace. UI is the only service exposed to the internet via the global LB; everything else is cluster-internal. Diagram source: [docs/diagrams/architecture.mmd](docs/diagrams/architecture.mmd).*
 
 | Service       | Language          | Port | Storage     | Deploy                       |
 |---------------|-------------------|------|-------------|------------------------------|
@@ -144,42 +119,9 @@ That's it. See the release flow below for what happens next.
 
 ## Release flow (GitOps)
 
-```
-git push origin v7
-        │
-        ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  GitHub Actions (.github/workflows/ci.yml)                       │
-│                                                                  │
-│  build-and-push (matrix × 5 services)                            │
-│    1. WIF auth → GCP (no JSON keys)                              │
-│    2. docker buildx build --push                                 │
-│         tags: v7  +  <short-sha>  +  latest                      │
-│         build-arg: GIT_SHA=<sha>  (ui-service bakes APP_VERSION) │
-│    3. cache-control regression test (ui-service only)            │
-│         pulls fresh image, runs it, asserts headers              │
-│                                                                  │
-│  bump-manifests                                                  │
-│    rewrites k8s/*.yaml image refs to :<short-sha>                │
-│    commits + pushes to main                                      │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-                               ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  ArgoCD (argocd ns)                                              │
-│  Watches main:k8s/  →  detects new revision                      │
-│  Server-Side-Apply with ignoreDifferences for GKE-managed fields │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │
-                               ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  GKE (ecom ns)                                                   │
-│  Deployments roll, PDBs respected, HPAs preserved                │
-│  Load balancer drains old NEG endpoints, adds new ones           │
-└──────────────────────────────────────────────────────────────────┘
-```
+![Release flow](docs/images/release-flow.png)
 
-Typical end-to-end time: **~3 minutes** from `git push` to live.
+*From `git tag v8 && git push` to live: ~3 minutes. WIF on every step so no JSON keys ever exist. Image SHAs are immutable; rollback is `git revert <bump-commit>`. Diagram source: [docs/diagrams/release-flow.mmd](docs/diagrams/release-flow.mmd).*
 
 **Rollback** is `git revert <bump-commit>` — the manifests pin to immutable SHAs, so ArgoCD just re-applies the previous version.
 
@@ -203,35 +145,9 @@ Plus the build-time cache-bust query: every release bakes its short SHA into `AP
 
 End-to-end visibility, all GitOps-managed, zero JSON keys.
 
-```
-Spring Boot pods (Micrometer)                               GKE node services
-   │  /actuator/prometheus                                       │
-   ▼                                                             ▼
-┌─────────────────────────┐    ┌───────────────────────────────────────────┐
-│  PodMonitoring CRDs     │    │  GMP managed scrapes (gke.tf flags)       │
-│  (90-podmonitoring.yaml)│    │  CADVISOR · KUBELET · STORAGE · POD       │
-└────────────┬────────────┘    │  DEPLOYMENT · STATEFULSET · DAEMONSET · HPA│
-             │                 └────────────────────┬──────────────────────┘
-             ▼                                      ▼
-        ┌──────────────────────────────────────────────────┐
-        │  Google Managed Prometheus (Cloud Monitoring)    │
-        └────────────────────────┬─────────────────────────┘
-                                 │ PromQL HTTP API
-                                 ▼
-       ┌───────────────────────────────────────────────┐
-       │  gmp-frontend (k8s/95-gmp-frontend.yaml)      │
-       │  ClusterIP :9090 · runs as KSA gmp-frontend   │
-       │  WI → GSA grafana-gmp-reader (monitoring.viewer)│
-       └────────────────────────┬──────────────────────┘
-                                │ plain Prometheus API (no auth)
-                                ▼
-              ┌──────────────────────────────────┐
-              │  Grafana 11.3.1 (96-grafana.yaml)│
-              │  PVC 10Gi · provisioned datasource│
-              │  + Spring Boot starter dashboard │
-              │  + K8S overview (15661, 170 panels)│
-              └──────────────────────────────────┘
-```
+![Observability pipeline](docs/images/observability.png)
+
+*Grafana holds no GCP credentials — the gmp-frontend pod (Workload Identity → GSA `grafana-gmp-reader`, `roles/monitoring.viewer`) proxies all queries to Cloud Monitoring on its behalf. Diagram source: [docs/diagrams/observability.mmd](docs/diagrams/observability.mmd).*
 
 | Piece | File | Notes |
 |---|---|---|
