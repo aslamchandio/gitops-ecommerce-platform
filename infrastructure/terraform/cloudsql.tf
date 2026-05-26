@@ -45,15 +45,30 @@ resource "google_sql_database_instance" "postgres" {
 resource "google_sql_database" "catalog" {
   name     = var.db_name_catalog
   instance = google_sql_database_instance.postgres.name
+
+  # The instance delete cascades to all its databases. Trying to DROP the
+  # database individually during `terraform destroy` race-fails when any
+  # client (k8s pods being torn down) still has an open connection
+  # ("database X is being accessed by other users"). ABANDON tells
+  # terraform to remove the resource from state without making the
+  # blocking API call — the DB still gets deleted, just by the instance
+  # teardown one step later.
+  deletion_policy = "ABANDON"
 }
 
 resource "google_sql_database" "orders" {
-  name     = var.db_name_orders
-  instance = google_sql_database_instance.postgres.name
+  name            = var.db_name_orders
+  instance        = google_sql_database_instance.postgres.name
+  deletion_policy = "ABANDON" # see google_sql_database.catalog for rationale
 }
 
 resource "google_sql_user" "app" {
   name     = var.db_user
   instance = google_sql_database_instance.postgres.name
   password = random_password.db_password.result
+
+  # DROP USER fails if the user owns objects (tables, schemas) — and it
+  # does, in both `catalog` and `orders`. The instance delete drops the
+  # user cleanly. Same pattern as the databases above.
+  deletion_policy = "ABANDON"
 }

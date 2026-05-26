@@ -25,6 +25,10 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.33"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
+    }
   }
 }
 
@@ -38,16 +42,22 @@ provider "google" {
 # plane — no static kubeconfig required.
 data "google_client_config" "default" {}
 
+# try() defaults let `terraform destroy` finish cleanly after the cluster
+# has already been removed from state. Without them the provider tries to
+# resolve google_container_cluster.primary.endpoint, sees null, and fails
+# to construct a REST client with "no client config" — even when there
+# are no kubernetes/helm resources left to manage. At apply-time the
+# real cluster reference always wins (try evaluates left-to-right).
 provider "kubernetes" {
-  host                   = "https://${google_container_cluster.primary.endpoint}"
-  token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = base64decode(google_container_cluster.primary.master_auth[0].cluster_ca_certificate)
+  host                   = try("https://${google_container_cluster.primary.endpoint}", "https://placeholder")
+  token                  = try(data.google_client_config.default.access_token, "placeholder")
+  cluster_ca_certificate = try(base64decode(google_container_cluster.primary.master_auth[0].cluster_ca_certificate), "")
 }
 
 provider "helm" {
   kubernetes {
-    host                   = "https://${google_container_cluster.primary.endpoint}"
-    token                  = data.google_client_config.default.access_token
-    cluster_ca_certificate = base64decode(google_container_cluster.primary.master_auth[0].cluster_ca_certificate)
+    host                   = try("https://${google_container_cluster.primary.endpoint}", "https://placeholder")
+    token                  = try(data.google_client_config.default.access_token, "placeholder")
+    cluster_ca_certificate = try(base64decode(google_container_cluster.primary.master_auth[0].cluster_ca_certificate), "")
   }
 }

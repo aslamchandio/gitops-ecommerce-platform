@@ -247,7 +247,49 @@ To add a new environment under the same bucket, copy [`backend.tf`](backend.tf) 
 terraform destroy
 ```
 
-Cloud SQL takes ~5 minutes to delete. Artifact Registry images are kept by default — delete the repo manually if you want them gone.
+End-to-end time is ~12-15 min. Cloud SQL is the slow part (~5 min on its own), followed by the GKE cluster (~3 min) and the global LB resources (~1-2 min). Artifact Registry images are kept by default — delete the repo manually with `gcloud artifacts repositories delete ecom-microservices --location=us-central1` if you want them gone.
+
+#### Structural protections baked in
+
+A first-time naive `terraform destroy` of this stack hits five distinct blockers — each one is now mitigated in code:
+
+| Blocker (raw GCP / TF behaviour) | Where the fix lives |
+|---|---|
+| GKE Gateway controller deletes the global LB **asynchronously** after Gateway/HTTPRoute removal. If the cluster is torn down first, the LB orphans and the CertificateMap delete fails with `can't delete certificate map that is referenced by a target proxy`. | [`argocd_application.tf`](argocd_application.tf): `time_sleep.argocd_cascade_grace` (90s) sits between `helm_release.argocd` and `kubernetes_manifest.ecom_application`. Destroy order pauses long enough for the controller to free the LB. |
+| Postgres user owns objects in `catalog` + `orders` → `DROP USER` fails. | [`cloudsql.tf`](cloudsql.tf): `deletion_policy = "ABANDON"` on `google_sql_user.app`. The instance delete cascades to it. |
+| Database drops race against still-open pod connections → `database "orders" is being accessed by other users`. | [`cloudsql.tf`](cloudsql.tf): `deletion_policy = "ABANDON"` on both `google_sql_database` resources. |
+| GCP's `servicenetworking` producer-tenant holds the peering open for a 10-30 min internal-cleanup window → `FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION`. | [`network.tf`](network.tf): `deletion_policy = "ABANDON"` on `google_service_networking_connection.private_vpc` + sibling `null_resource.private_vpc_peering_cleanup` with a destroy-time `gcloud compute networks peerings delete` that severs the consumer-side peering. |
+| `kubernetes_manifest` requires a live cluster at plan time. After the cluster is destroyed, any subsequent `terraform destroy / plan / apply` fails with `cannot create REST client: no client config`. | [`versions.tf`](versions.tf): `try(...)` wrappers on `host`, `token`, and `cluster_ca_certificate` in the `kubernetes` + `helm` provider blocks. At apply-time the real cluster refs win; after destroy the placeholders let the provider init cleanly. |
+
+The result: `terraform destroy` runs cleanly in one pass on a healthy stack. No manual gcloud cleanup, no `terraform state rm`, no order workarounds.
+
+#### If something does get stuck
+
+The most common residual orphan after a forced/interrupted destroy is the global LB stack. Sweep with:
+
+```bash
+# Run these in order — each entry depends on the next
+gcloud compute forwarding-rules     list --global
+gcloud compute target-https-proxies list
+gcloud compute target-http-proxies  list
+gcloud compute url-maps             list
+gcloud compute backend-services     list
+gcloud compute network-endpoint-groups list
+
+# Delete what's left (replace NAME placeholders)
+gcloud compute forwarding-rules     delete NAME --global --quiet
+gcloud compute target-https-proxies delete NAME --quiet
+# ...etc
+```
+
+If the service-networking peering is stuck (the producer-tenant grace period beat the destroy provisioner), force it from the consumer side:
+
+```bash
+gcloud compute networks peerings delete servicenetworking-googleapis-com \
+  --network=ecom-vpc --project=$PROJECT_ID --quiet
+```
+
+The producer tenant connection self-reaps once both sides are severed; you don't need to chase the `qf*-tp` project.
 
 ---
 

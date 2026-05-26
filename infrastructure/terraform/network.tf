@@ -34,6 +34,40 @@ resource "google_service_networking_connection" "private_vpc" {
   network                 = google_compute_network.vpc.id
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_services.name]
+
+  # After Cloud SQL + Memorystore are deleted, GCP's producer-tenant
+  # project still holds the peering open for a 10-30 min internal-cleanup
+  # window. Trying to delete the connection via the API during that
+  # window fails with FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION
+  # and blocks the rest of the teardown.
+  #
+  # The structural fix is two parts:
+  #   1. ABANDON so terraform doesn't make the failing API call.
+  #   2. A null_resource sibling (below) whose destroy provisioner does
+  #      the *consumer*-side VPC peering delete via gcloud — that's the
+  #      side we own. The producer-tenant connection then self-reaps
+  #      whenever GCP's cleanup catches up.
+  deletion_policy = "ABANDON"
+}
+
+# Destroy-time companion to google_service_networking_connection above.
+# Lives as a separate resource so the destroy provisioner can be ordered
+# correctly: this resource depends_on the connection, so on apply it's
+# created after, and on destroy it's destroyed BEFORE — which means the
+# gcloud peering delete runs while terraform still thinks the connection
+# exists, satisfying the prerequisite.
+resource "null_resource" "private_vpc_peering_cleanup" {
+  triggers = {
+    network = google_compute_network.vpc.name
+    project = var.project_id
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "gcloud compute networks peerings delete servicenetworking-googleapis-com --network=${self.triggers.network} --project=${self.triggers.project} --quiet || true"
+  }
+
+  depends_on = [google_service_networking_connection.private_vpc]
 }
 
 # ---- Cloud NAT for the private GKE nodes ----
