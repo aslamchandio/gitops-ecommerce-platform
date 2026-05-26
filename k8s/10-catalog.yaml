@@ -110,12 +110,16 @@ spec:
               port: 8081
             initialDelaySeconds: 30
 ---
+# Cluster-internal only — ui-service reaches it via in-cluster DNS
+# (`http://catalog-service:8081`). External traffic enters through the
+# Gateway in 60-gateway.yaml and is routed only to ui-service.
 apiVersion: v1
 kind: Service
 metadata:
   name: catalog-service
   namespace: ecom
 spec:
+  type: ClusterIP
   selector:
     app: catalog-service
   ports:

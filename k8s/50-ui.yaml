@@ -73,6 +73,11 @@ spec:
               port: 8080
             initialDelaySeconds: 60
 ---
+# ClusterIP — but unlike the other 4 services this one is fronted by the
+# GKE Gateway in 60-gateway.yaml. The Gateway controller creates a NEG
+# from the Service endpoints and wires the global L7 load balancer
+# directly to the pod IPs, bypassing kube-proxy. We still use ClusterIP
+# (not LoadBalancer) because the Gateway provides the public IP.
 apiVersion: v1
 kind: Service
 metadata:
@@ -83,10 +88,10 @@ metadata:
     # targets this Service. Explicit annotation is harmless and aids debugging.
     cloud.google.com/neg: '{"exposed_ports":{"80":{"name":"ui-service-neg"}}}'
 spec:
+  type: ClusterIP
   selector:
     app: ui-service
   ports:
     - port: 80
       targetPort: 8080
       appProtocol: HTTP  # hint for the LB health check
-  type: ClusterIP

@@ -76,12 +76,15 @@ spec:
               port: 8082
             initialDelaySeconds: 60
 ---
+# Cluster-internal only — ui-service reaches it via in-cluster DNS
+# (`http://cart-service:8082`). Not exposed to the internet.
 apiVersion: v1
 kind: Service
 metadata:
   name: cart-service
   namespace: ecom
 spec:
+  type: ClusterIP
   selector:
     app: cart-service
   ports:

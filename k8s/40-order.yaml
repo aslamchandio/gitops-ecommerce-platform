@@ -100,12 +100,15 @@ spec:
               port: 8084
             initialDelaySeconds: 60
 ---
+# Cluster-internal only — checkout-service reaches it via in-cluster DNS
+# (`http://order-service:8084`). Not exposed to the internet.
 apiVersion: v1
 kind: Service
 metadata:
   name: order-service
   namespace: ecom
 spec:
+  type: ClusterIP
   selector:
     app: order-service
   ports:

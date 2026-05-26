@@ -68,12 +68,15 @@ spec:
               port: 8083
             initialDelaySeconds: 15
 ---
+# Cluster-internal only — ui-service reaches it via in-cluster DNS
+# (`http://checkout-service:8083`). Not exposed to the internet.
 apiVersion: v1
 kind: Service
 metadata:
   name: checkout-service
   namespace: ecom
 spec:
+  type: ClusterIP
   selector:
     app: checkout-service
   ports:
