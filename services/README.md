@@ -42,13 +42,16 @@ Every service reads its dependencies from environment variables (no hardcoded ho
 
 K8s injects these via the `Deployment.spec.template.spec.containers[].env` list. See `k8s/10..50-*.yaml` for the production wiring.
 
-### Health endpoints
+### Health + metrics endpoints
 
-| Service | Endpoint |
-|---|---|
-| Spring Boot services | `/actuator/health/readiness` (used by GKE HealthCheckPolicy) |
-| `catalog-service` (Go) | `/health` |
-| `checkout-service` (Node) | `/health` |
+| Service | Endpoint | Used by |
+|---|---|---|
+| Spring Boot services | `/actuator/health/readiness` | GKE `HealthCheckPolicy` (load balancer); k8s readiness probe |
+| Spring Boot services | `/actuator/prometheus` | GMP scrape (via [`k8s/90-podmonitoring.yaml`](../k8s/90-podmonitoring.yaml)) |
+| `catalog-service` (Go) | `/health` | k8s readiness probe |
+| `checkout-service` (Node) | `/health` | k8s readiness probe |
+
+`/actuator/prometheus` is currently only on the **3 Java services** (`ui`, `cart`, `order`) — Micrometer dependency (`micrometer-registry-prometheus` in `pom.xml`) + the endpoint added to `management.endpoints.web.exposure.include` in `application.yml`. Go and Node services don't yet expose a `/metrics` endpoint — adding one is the next step before they show up in Grafana.
 
 ### Cache-Control (ui-service only)
 
@@ -128,6 +131,35 @@ See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) for the full pipel
 - **`WebMvcConfig`** sets the cache headers (see above).
 - **Static**: `static/css/styles.css` (~30 KB), `static/js/app.js` (~2 KB) — no build step, no bundler.
 - **Themes**: light + dark via CSS variables + `localStorage`; localhost defaults to dark for distinct local feel.
+
+---
+
+## Metrics (Micrometer)
+
+The 3 Spring Boot services (`ui`, `cart`, `order`) emit Prometheus metrics for GMP to scrape. Wiring is two lines per service:
+
+```xml
+<!-- pom.xml -->
+<dependency>
+  <groupId>io.micrometer</groupId>
+  <artifactId>micrometer-registry-prometheus</artifactId>
+</dependency>
+```
+
+```yaml
+# application.yml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+```
+
+That's enough — Spring Boot auto-configures the registry, and Actuator exposes `/actuator/prometheus` on the same HTTP port as the app. Micrometer ships defaults for JVM (`jvm_memory_*`, GC, threads), HTTP (`http_server_requests_seconds_*`), process (`process_cpu_usage`), HikariCP (`hikaricp_connections_*`), Tomcat (`tomcat_threads_*`, sessions), Logback (`logback_events_total`).
+
+PodMonitoring CRDs in [`k8s/90-podmonitoring.yaml`](../k8s/90-podmonitoring.yaml) tell GMP to scrape them every 30s. Visualized in Grafana — see the [observability section in the root README](../README.md#observability) for the full pipeline + port-forward command.
+
+> Catalog (Go) and Checkout (Node) don't yet expose `/metrics`. Adding them is a follow-up: `prometheus/client_golang` for Go, `prom-client` for Node, plus matching PodMonitoring entries.
 
 ---
 

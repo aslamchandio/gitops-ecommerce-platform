@@ -13,6 +13,7 @@ A polyglot microservices storefront that ingests products from the public [FakeS
 - **Keyless CI** — GitHub Actions authenticates to GCP via Workload Identity Federation. No JSON keys anywhere.
 - **SHA-pinned releases** — every release pins immutable image digests in `k8s/*.yaml`; rollback is `git revert`.
 - **Three-layer cache enforcement** — Spring filter + GKE Gateway `ResponseHeaderModifier` + CI smoke test, so a UI deploy is **instantly visible** to every user without browser tricks.
+- **In-cluster observability** — Google Managed Prometheus scrapes every service's `/actuator/prometheus` + cAdvisor + kube-state-metrics; Grafana runs in-cluster, queries GMP via a Workload-Identity-authed proxy (no GCP creds in Grafana), ships a starter Spring Boot dashboard + the [grafana.com/15661](https://grafana.com/grafana/dashboards/15661) K8s dashboard pre-loaded.
 - **Spot-first economics** — GKE `ComputeClass` prefers Spot VMs with on-demand fallback (~70% cheaper).
 - **Resilient under Spot preemption** — every service runs at `minReplicas=2` with `topologySpreadConstraints` (hostname + zone). A single node preemption never takes a service to zero; load balancer stays healthy.
 - **Private data plane** — Cloud SQL Postgres and Memorystore Redis on a VPC with no public IPs, tuned for the replica fan-out (`max_connections=75`, HikariCP capped per pod).
@@ -111,6 +112,7 @@ This provisions:
 | GitOps             | ArgoCD via Helm chart `9.5.15` (ships ArgoCD v3.4.2)                     |
 | ArgoCD app         | `ecom` Application: auto-sync, prune, self-heal · ignoreDifferences for GKE NEG annotations |
 | CI identity        | Workload Identity Federation pool + GitHub OIDC provider · SA scoped to Artifact Registry only |
+| Observability      | GMP enabled on the cluster · 9 managed scrape components (SYSTEM_COMPONENTS + CADVISOR + KUBELET + STORAGE + POD + DEPLOYMENT + STATEFULSET + DAEMONSET + HPA) · GSA `grafana-gmp-reader` (monitoring.viewer) bound via WI to the in-cluster `gmp-frontend` KSA |
 
 See [`infrastructure/terraform/README.md`](infrastructure/terraform/README.md) for the full module-by-module rundown.
 
@@ -197,6 +199,79 @@ Plus the build-time cache-bust query: every release bakes its short SHA into `AP
 
 ---
 
+## Observability
+
+End-to-end visibility, all GitOps-managed, zero JSON keys.
+
+```
+Spring Boot pods (Micrometer)                               GKE node services
+   │  /actuator/prometheus                                       │
+   ▼                                                             ▼
+┌─────────────────────────┐    ┌───────────────────────────────────────────┐
+│  PodMonitoring CRDs     │    │  GMP managed scrapes (gke.tf flags)       │
+│  (90-podmonitoring.yaml)│    │  CADVISOR · KUBELET · STORAGE · POD       │
+└────────────┬────────────┘    │  DEPLOYMENT · STATEFULSET · DAEMONSET · HPA│
+             │                 └────────────────────┬──────────────────────┘
+             ▼                                      ▼
+        ┌──────────────────────────────────────────────────┐
+        │  Google Managed Prometheus (Cloud Monitoring)    │
+        └────────────────────────┬─────────────────────────┘
+                                 │ PromQL HTTP API
+                                 ▼
+       ┌───────────────────────────────────────────────┐
+       │  gmp-frontend (k8s/95-gmp-frontend.yaml)      │
+       │  ClusterIP :9090 · runs as KSA gmp-frontend   │
+       │  WI → GSA grafana-gmp-reader (monitoring.viewer)│
+       └────────────────────────┬──────────────────────┘
+                                │ plain Prometheus API (no auth)
+                                ▼
+              ┌──────────────────────────────────┐
+              │  Grafana 11.3.1 (96-grafana.yaml)│
+              │  PVC 10Gi · provisioned datasource│
+              │  + Spring Boot starter dashboard │
+              │  + K8S overview (15661, 170 panels)│
+              └──────────────────────────────────┘
+```
+
+| Piece | File | Notes |
+|---|---|---|
+| Java app metrics | `services/{ui,cart,order}-service/pom.xml` + `application.yml` | Micrometer Prometheus registry; `/actuator/prometheus` in `management.endpoints.web.exposure` |
+| GMP scrape | [`k8s/90-podmonitoring.yaml`](k8s/90-podmonitoring.yaml) | PodMonitoring CRDs for the 3 Java services (Go + Node services TBD) |
+| Cluster metrics | [`infrastructure/terraform/gke.tf`](infrastructure/terraform/gke.tf) | 9 `monitoring_config.enable_components` flags — gives PromQL access to `container_*`, `kube_*`, `kubelet_volume_stats_*` |
+| GMP auth proxy | [`k8s/95-gmp-frontend.yaml`](k8s/95-gmp-frontend.yaml) | `prometheus-engine/frontend:v0.18.0-gke.2` (image version matches cluster GMP operator) |
+| IAM | [`infrastructure/terraform/grafana.tf`](infrastructure/terraform/grafana.tf) | GSA `grafana-gmp-reader` with `roles/monitoring.viewer` + WI binding for KSA `ecom/gmp-frontend` |
+| Grafana | [`k8s/96-grafana.yaml`](k8s/96-grafana.yaml) | Deployment + Secret + 10Gi PVC + datasource/provider ConfigMaps + projected dashboards volume |
+| K8s dashboard | [`k8s/97-grafana-dashboard-k8s.yaml`](k8s/97-grafana-dashboard-k8s.yaml) | grafana.com/15661, 170 panel datasource refs patched to `uid: gmp` |
+
+### Access
+
+Port-forward only, no public exposure (it's an ops tool, not user-facing):
+
+```bash
+kubectl -n ecom port-forward svc/grafana 3000:3000
+# open http://localhost:3000  →  admin / ChangeMeOnFirstLogin!  (rotate on first login)
+```
+
+Dashboards land in the `ecom` folder. Anything created in the UI persists to the PVC; the two provisioned dashboards are intentionally **read-only** so UI edits can't drift from git — use **Save as…** to fork a copy.
+
+### Adding another community dashboard
+
+```bash
+# 1. download + patch the datasource uid
+curl -sSL https://grafana.com/api/dashboards/<ID>/revisions/latest/download \
+  | sed 's/${DS__SOMETHING}/gmp/g' > dash.json
+
+# 2. wrap in a ConfigMap
+kubectl create configmap grafana-dashboards-<name> \
+  --from-file=<name>.json=dash.json -n ecom \
+  --dry-run=client -o yaml > k8s/9X-grafana-dashboard-<name>.yaml
+
+# 3. add a configMap entry under volumes.projected.sources in 96-grafana.yaml
+# 4. commit, ArgoCD syncs, Grafana reloads (~30s)
+```
+
+---
+
 ## Project layout
 
 ```
@@ -216,7 +291,11 @@ Plus the build-time cache-bust query: every release bakes its short SHA into `AP
 │   ├── 10..50-*.yaml               Deployment + Service per microservice
 │   ├── 60-gateway.yaml             Gateway (HTTPS via certmap) + HTTPRoutes + cache headers + HealthCheckPolicy
 │   ├── 70-hpa.yaml                 HorizontalPodAutoscaler per service (minReplicas=2)
-│   └── 80-pdb.yaml                 PodDisruptionBudget per service (maxUnavailable=1)
+│   ├── 80-pdb.yaml                 PodDisruptionBudget per service (maxUnavailable=1)
+│   ├── 90-podmonitoring.yaml       PodMonitoring CRDs telling GMP to scrape /actuator/prometheus
+│   ├── 95-gmp-frontend.yaml        GMP query proxy (WI-authed) — translates Prometheus API → Cloud Monitoring
+│   ├── 96-grafana.yaml             Grafana 11.3.1 + PVC + datasource + provisioned starter dashboard
+│   └── 97-grafana-dashboard-k8s.yaml  K8S Dashboard (grafana.com/15661) as ConfigMap
 │
 ├── .github/workflows/ci.yml        Build → push → bump-manifests, with cache-header regression test
 ├── docker-compose.yml              Local dev stack
@@ -264,7 +343,7 @@ Spring Boot + Thymeleaf storefront with a vibrant top-nav layout. Includes:
 
 **Delivery:** GitHub Actions · Workload Identity Federation · ArgoCD (Helm chart 9.5.15 → ArgoCD v3.4.2) · docker buildx with GHA cache
 
-**Observability:** Spring Boot Actuator (`/actuator/health/readiness`) · Cloud Logging + Cloud Monitoring (via GKE node service account)
+**Observability:** Spring Boot Actuator (`/actuator/health/readiness` + `/actuator/prometheus`) · Micrometer Prometheus registry on the 3 Java services · Google Managed Prometheus (CADVISOR + KUBELET + STORAGE + kube-state-metrics components) · in-cluster Grafana 11.3.1 with GMP-frontend auth proxy (Workload Identity, no JSON keys) · provisioned Spring Boot starter dashboard + K8s overview dashboard ([grafana.com/15661](https://grafana.com/grafana/dashboards/15661)) · Cloud Logging
 
 ---
 

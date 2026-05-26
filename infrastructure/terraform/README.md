@@ -9,7 +9,7 @@ Provisions every piece of GCP infrastructure the project depends on: network, GK
 | Layer            | Resources                                                                                 | File                                              |
 |------------------|--------------------------------------------------------------------------------------------|---------------------------------------------------|
 | Network          | VPC + subnet + Cloud NAT + private services access (private IPs for SQL/Redis)              | [`network.tf`](network.tf)                        |
-| Compute          | GKE Standard regional cluster (3 zones) · minimal system pool · Node Auto-Provisioning · Gateway API enabled | [`gke.tf`](gke.tf)                                |
+| Compute          | GKE Standard regional cluster (3 zones) · minimal system pool · Node Auto-Provisioning · Gateway API enabled · **GMP enabled with 9 scrape components** | [`gke.tf`](gke.tf)                                |
 | Data             | Cloud SQL Postgres (private, `max_connections=75` via `database_flags`) · Memorystore Redis (basic, private) | [`cloudsql.tf`](cloudsql.tf), [`redis.tf`](redis.tf) |
 | Secrets          | Generated DB password (random_password) · GSM secret entry · K8s Secret + ConfigMap        | [`secrets.tf`](secrets.tf), [`secret_manager.tf`](secret_manager.tf) |
 | Image registry   | Artifact Registry repo `ecom-microservices` with cleanup policy                            | [`artifact_registry.tf`](artifact_registry.tf)    |
@@ -18,6 +18,7 @@ Provisions every piece of GCP infrastructure the project depends on: network, GK
 | IAM              | GKE node SA (least-privilege) · workload SA bound via Workload Identity to read GSM secrets | [`iam.tf`](iam.tf)                                |
 | GitOps           | ArgoCD via Helm chart `9.5.15` (ArgoCD v3.4.2) · `ecom` Application with auto-sync         | [`argocd.tf`](argocd.tf), [`argocd_application.tf`](argocd_application.tf) |
 | Keyless CI       | Workload Identity Federation pool + GitHub OIDC provider · SA scoped to AR writer only     | [`github_oidc.tf`](github_oidc.tf)                |
+| Observability    | GSA `grafana-gmp-reader` (`roles/monitoring.viewer`) + WI binding for in-cluster Grafana proxy KSA | [`grafana.tf`](grafana.tf)                        |
 | API enablement   | All required GCP APIs enabled before dependents are created                                | [`apis.tf`](apis.tf)                              |
 
 ---
@@ -133,6 +134,48 @@ Service account permissions are deliberately minimal — Artifact Registry write
 
 ---
 
+## Observability: GMP + Grafana
+
+### What's enabled in `gke.tf`
+
+```hcl
+monitoring_config {
+  enable_components = [
+    "SYSTEM_COMPONENTS",   # baseline GKE system metrics
+    "CADVISOR",            # container_cpu_*, container_memory_*, container_fs_*, container_network_*
+    "KUBELET",             # kubelet_running_pods, kubelet_runtime_operations_*
+    "STORAGE",             # kubelet_volume_stats_* (PVC capacity/free)
+    "POD",                 # kube_pod_*
+    "DEPLOYMENT",          # kube_deployment_*
+    "STATEFULSET", "DAEMONSET", "HPA",   # matching kube_* families
+  ]
+  managed_prometheus { enabled = true }
+}
+```
+
+Each component is a separate managed scrape config that GMP runs inside the cluster — no DaemonSets to maintain, no node-exporter to deploy. Metrics show up under standard Prometheus names in PromQL via the in-cluster GMP query frontend (see [`k8s/95-gmp-frontend.yaml`](../../k8s/95-gmp-frontend.yaml)).
+
+### `grafana.tf` — IAM for the GMP frontend
+
+```
+GSA grafana-gmp-reader
+  ├─ roles/monitoring.viewer (project-level, read-only)
+  └─ iam.workloadIdentityUser bound to
+       serviceAccount:<project>.svc.id.goog[ecom/gmp-frontend]
+```
+
+The in-cluster `gmp-frontend` pod (KSA `gmp-frontend` in namespace `ecom`) impersonates the GSA via Workload Identity and forwards Grafana's PromQL queries to `monitoring.googleapis.com`. Grafana itself holds **zero GCP credentials** — if the Grafana pod is compromised, the attacker can read metrics through the in-cluster proxy but can't touch any other GCP API directly.
+
+### Cost
+
+Each ingested sample bills under Cloud Monitoring. First **250M samples/month per project are free**; a small cluster with 9 scrape components + 3 app `/actuator/prometheus` endpoints sits comfortably inside the free tier. The dominant series count comes from cAdvisor (per-container labels × node count); if you scale the cluster up, watch the Monitoring billing page.
+
+### Local validation
+
+GMP and Grafana are GKE-only — there's no managed prometheus in `docker-compose`. The compose-first smoke test confirms `/actuator/prometheus` returns valid metric output, but the scrape + dashboard pipeline only exists in production.
+
+---
+
 ## Cost estimate (single region, idle traffic)
 
 | Resource                           | ~Monthly USD                                  |
@@ -224,6 +267,7 @@ infrastructure/terraform/
 ├── argocd.tf                  Helm release of argo-cd chart (LB exposed, source-range locked)
 ├── argocd_application.tf      The "ecom" Application CR pointing at k8s/
 ├── github_oidc.tf             WIF pool + provider + repo-scoped service account
+├── grafana.tf                 GSA + WI binding for the in-cluster GMP query proxy (Grafana auth)
 ├── secrets.tf                 Generated DB password + K8s Secret
 ├── secret_manager.tf          GSM secret entries (workload-identity readable)
 ├── variables.tf               Declarations only (no defaults — fail fast)

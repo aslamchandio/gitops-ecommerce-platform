@@ -4,17 +4,21 @@ ArgoCD's source of truth for what runs in the `ecom` namespace. This directory i
 
 ```
 k8s/
-├── 00-namespace.yaml         ecom namespace
-├── 05-compute-class.yaml     Spot-first ComputeClass (NAP scheduling target)
-├── 10-catalog.yaml           Deployment + Service for catalog-service
-├── 20-cart.yaml              Deployment + Service for cart-service
-├── 30-checkout.yaml          Deployment + Service for checkout-service
-├── 40-order.yaml             Deployment + Service for order-service
-├── 50-ui.yaml                Deployment + Service for ui-service
-├── 60-gateway.yaml           Gateway + 2 HTTPRoutes + HealthCheckPolicy + cache headers
-├── 70-hpa.yaml               HorizontalPodAutoscaler per service (minReplicas=2)
-├── 80-pdb.yaml               PodDisruptionBudget per service (maxUnavailable=1)
-└── generated-config.yaml     ConfigMap with DB/Redis endpoints (terraform-managed, gitignored)
+├── 00-namespace.yaml             ecom namespace
+├── 05-compute-class.yaml         Spot-first ComputeClass (NAP scheduling target)
+├── 10-catalog.yaml               Deployment + Service for catalog-service
+├── 20-cart.yaml                  Deployment + Service for cart-service
+├── 30-checkout.yaml              Deployment + Service for checkout-service
+├── 40-order.yaml                 Deployment + Service for order-service
+├── 50-ui.yaml                    Deployment + Service for ui-service
+├── 60-gateway.yaml               Gateway + 2 HTTPRoutes + HealthCheckPolicy + cache headers
+├── 70-hpa.yaml                   HorizontalPodAutoscaler per service (minReplicas=2)
+├── 80-pdb.yaml                   PodDisruptionBudget per service (maxUnavailable=1)
+├── 90-podmonitoring.yaml         PodMonitoring CRDs — tell GMP to scrape /actuator/prometheus
+├── 95-gmp-frontend.yaml          GMP query proxy + KSA (Workload Identity → Cloud Monitoring)
+├── 96-grafana.yaml               Grafana 11.3.1 + PVC + provisioned datasource + starter dashboard
+├── 97-grafana-dashboard-k8s.yaml K8S Dashboard (grafana.com/15661) as ConfigMap
+└── generated-config.yaml         ConfigMap with DB/Redis endpoints (terraform-managed, gitignored)
 ```
 
 The cross-cutting concerns (autoscaling, disruption budgets) live in their own files alongside the per-service Deployment + Service so each "axis" is browsable from one place — same pattern Kustomize/Helm setups end up at.
@@ -159,9 +163,85 @@ total_db_connections ≈ (replicas × HikariCP pool) + catalog_pool + probes + s
 
 ---
 
+## Observability stack (files 90 / 95 / 96 / 97)
+
+GitOps-managed Prometheus + Grafana, all inside the cluster.
+
+### 90-podmonitoring.yaml — what GMP scrapes
+
+Three `PodMonitoring` CRDs (one per Java service) tell Google Managed Prometheus to scrape `/actuator/prometheus` every 30s. Selectors match the `app=` label on the Deployment pod template. Metrics flow into Cloud Monitoring under the `prometheus_target` monitored resource.
+
+> Go (`catalog-service`) and Node (`checkout-service`) don't have PodMonitoring entries yet — they need their own metrics endpoints first.
+
+### 95-gmp-frontend.yaml — query auth proxy
+
+The piece that holds the GCP credentials so Grafana doesn't have to. Runs the official `prometheus-engine/frontend` image (pinned to the cluster's GMP operator version) and exposes a vanilla Prometheus HTTP API on `:9090`. Forwards each query to `monitoring.googleapis.com` with the access token of GSA `grafana-gmp-reader` (impersonated via Workload Identity, `roles/monitoring.viewer` only).
+
+```
+Grafana → http://gmp-frontend:9090   ←  no auth, in-cluster ClusterIP
+  gmp-frontend → monitoring.googleapis.com   ←  WI access token, read-only
+```
+
+If you bump the GKE cluster, also bump the `frontend` image tag in this file to match — verify with `kubectl -n gmp-system get pods` and look at the operator image.
+
+### 96-grafana.yaml — the visualization layer
+
+Grafana `11.3.1` with everything provisioned at startup:
+
+| Concern | How it's wired |
+|---|---|
+| State (users, prefs, UI-created dashboards) | 10Gi PVC `grafana-data`, `RWO`, default `standard-rwo` storage class |
+| Admin password | `Secret/grafana-admin` (placeholder `ChangeMeOnFirstLogin!` — rotate after first login or replace via the SecretManager pattern in `secret_manager.tf`) |
+| Datasource | `ConfigMap/grafana-datasources` → `provisioning/datasources/datasources.yaml` — points at `http://gmp-frontend:9090` |
+| Dashboard provider | `ConfigMap/grafana-dashboard-provider` → `provisioning/dashboards/providers.yaml` (file provider, `folder: ecom`, 30s reload) |
+| Dashboards | Projected volume mounts multiple ConfigMaps at `/var/lib/grafana-dashboards`. Provisioned dashboards are intentionally **read-only** in the UI so they can't drift from git — use `Save as…` to fork |
+
+### 97-grafana-dashboard-k8s.yaml — pinned community dashboard
+
+Dashboard 15661 from grafana.com ("K8S Dashboard", 170 panels) imported into a ConfigMap. The datasource UID was patched from `${DS__VICTORIAMETRICS-PROD-ALL}` to `gmp` so every panel queries through the in-cluster frontend.
+
+### Access
+
+```bash
+kubectl -n ecom port-forward svc/grafana 3000:3000
+# http://localhost:3000  →  admin / ChangeMeOnFirstLogin!
+```
+
+No public ingress on purpose — it's a dev/ops tool.
+
+### Adding another community dashboard (the IaC pattern)
+
+```bash
+curl -sSL https://grafana.com/api/dashboards/<ID>/revisions/latest/download \
+  | sed 's/${DS__SOMETHING}/gmp/g' > dash.json
+
+kubectl create configmap grafana-dashboards-<name> \
+  --from-file=<name>.json=dash.json -n ecom \
+  --dry-run=client -o yaml > k8s/98-grafana-dashboard-<name>.yaml
+
+# then add one more `configMap:` entry under volumes.projected.sources
+# in 96-grafana.yaml's grafana Deployment.
+```
+
+Commit → ArgoCD syncs (~30s) → Grafana provisioner reloads (~30s).
+
+### What metrics are queryable
+
+| Family | Source | Enabled where |
+|---|---|---|
+| `jvm_*`, `http_server_requests_seconds_*`, `process_cpu_usage`, `hikaricp_*`, `tomcat_*`, `logback_events_total` | Micrometer in cart/order/ui | service `pom.xml` + `application.yml` + [`90-podmonitoring.yaml`](90-podmonitoring.yaml) |
+| `container_cpu_*`, `container_memory_*`, `container_fs_*`, `container_network_*` | cAdvisor | `gke.tf` `monitoring_config.enable_components` includes `CADVISOR` |
+| `kube_pod_*`, `kube_deployment_*`, `kube_horizontalpodautoscaler_*`, `kube_statefulset_*`, `kube_daemonset_*` | GKE managed kube-state-metrics | `POD`, `DEPLOYMENT`, `STATEFULSET`, `DAEMONSET`, `HPA` components in `gke.tf` |
+| `kubelet_*`, `kubelet_volume_stats_*` | kubelet endpoints | `KUBELET`, `STORAGE` components in `gke.tf` |
+
+Anything NOT in this list won't show up in PromQL even if a community dashboard references it — typically `node_*` (node-exporter) panels show "No data" because we don't deploy node-exporter.
+
+---
+
 ## Operational notes
 
 - **Don't edit live resources with `kubectl edit`** — ArgoCD's `selfHeal` reverts on the next reconcile (~30s). Change git instead.
-- **Connection check**: `kubectl -n ecom get gateway,httproute,deployment,svc,pdb,hpa`
+- **Connection check**: `kubectl -n ecom get gateway,httproute,deployment,svc,pdb,hpa,podmonitoring`
 - **ArgoCD UI**: `kubectl -n argocd port-forward svc/argocd-server 8080:80` then visit `localhost:8080` (initial password via `kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d`).
+- **Grafana UI**: `kubectl -n ecom port-forward svc/grafana 3000:3000` then visit `localhost:3000`.
 - **Force sync**: usually unnecessary, but `kubectl -n argocd annotate app ecom argocd.argoproj.io/refresh=hard --overwrite` forces a re-read of the repo.
