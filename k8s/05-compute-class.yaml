@@ -6,6 +6,17 @@
 #   2. Spot n2 nodes  (fallback if e2 spot is exhausted)
 #   3. On-demand e2  (last resort — guarantees pods schedule)
 #
+# Each priority pins disk + zones explicitly so the manifest is self-contained
+# (these were previously inherited silently from terraform NAP defaults).
+#
+# Disk:  pd-standard 50 GiB — cheapest persistent boot disk type. Container
+#        images and ephemeral storage share this disk; 50 GiB is comfortable
+#        for the 5-service image footprint (~2 GiB total) plus headroom.
+#
+# Zones: us-central1-{b,c,f} — the 3 zones of the regional cluster. Listing
+#        all three lets NAP pick whichever zone currently has Spot capacity
+#        and keeps topologySpreadConstraints (zone) viable across nodes.
+#
 # Pods opt in by setting:
 #   nodeSelector:
 #     cloud.google.com/compute-class: ecom-spot
@@ -22,10 +33,34 @@ spec:
   priorities:
     - machineFamily: e2
       spot: true
+      storage:
+        bootDiskType: pd-standard
+        bootDiskSize: 50
+      location:
+        zones:
+          - us-central1-b
+          - us-central1-c
+          - us-central1-f
     - machineFamily: n2
       spot: true
+      storage:
+        bootDiskType: pd-standard
+        bootDiskSize: 50
+      location:
+        zones:
+          - us-central1-b
+          - us-central1-c
+          - us-central1-f
     - machineFamily: e2
       spot: false  # on-demand fallback
+      storage:
+        bootDiskType: pd-standard
+        bootDiskSize: 50
+      location:
+        zones:
+          - us-central1-b
+          - us-central1-c
+          - us-central1-f
   nodePoolAutoCreation:
     enabled: true
   # If demand outstrips all listed priorities, scale up anyway with whatever
