@@ -19,6 +19,9 @@ on:
     paths:
       - 'infrastructure/terraform/**'
       - '.github/workflows/terraform-*.yml'
+  # Manual trigger from the Actions tab (or `gh workflow run terraform-plan.yml`).
+  # Useful for one-off plans without opening a PR — e.g. drift checks.
+  workflow_dispatch:
 
 permissions:
   contents:      read
@@ -104,8 +107,9 @@ jobs:
           terraform plan -no-color -input=false -lock-timeout=120s 2>&1 \
             | tee /tmp/plan.txt
 
-      # ----- post plan output as PR comment -----
+      # ----- post plan output as PR comment (only when triggered by a PR) -----
       - name: Post plan as PR comment
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
