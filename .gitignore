@@ -50,3 +50,5 @@ k8s/generated-config.yaml
 Thumbs.db
 tfplan
 tfplan-*
+# Broader catch-all for any key-file variant (.bak, .compromised, .old, etc.)
+infrastructure/terraform/.argocd-deploy-key*
