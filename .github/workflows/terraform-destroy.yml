@@ -46,9 +46,15 @@ jobs:
         env:
           TF_VAR_project_id:                 ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
+        # -refresh=false skips the plan-time refresh that would otherwise
+        # have kubernetes_manifest resources phone the GKE API for CRD
+        # schema validation. From a GitHub-hosted runner that's a guaranteed
+        # timeout against a private cluster master, and it blocks the entire
+        # destroy graph even when the manifest itself isn't in state. State
+        # accuracy isn't a concern here — we want to delete everything.
         run: |
           terraform init    -input=false -lock-timeout=180s
-          terraform destroy -input=false -auto-approve -lock-timeout=600s
+          terraform destroy -input=false -auto-approve -refresh=false -lock-timeout=600s
 
       - name: Post-destroy sanity check
         if: always()
