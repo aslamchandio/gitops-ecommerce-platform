@@ -172,24 +172,41 @@ Values that land in the repo's **Settings → Secrets and variables → Actions*
 |---|---|---|---|
 | Secret | `GCP_WIF_PROVIDER`  | `terraform output github_actions_wif_provider` | all workflows |
 | Secret | `GCP_SERVICE_ACCOUNT` | `terraform output github_actions_sa_email` | `ci.yml` (image build/push — Artifact Registry writer only) |
-| Secret | `TF_RUNNER_SA` | `terraform output terraform_runner_sa_email` | `terraform-plan.yml`, `terraform-apply.yml`, `terraform-destroy.yml` |
+| Secret | `TF_RUNNER_SA` | `terraform-runner@<project>.iam.gserviceaccount.com` (created by [`scripts/create-tf-runner.sh`](../../scripts/create-tf-runner.sh) — see below) | `terraform-plan.yml`, `terraform-apply.yml`, `terraform-destroy.yml` |
 | Secret | `ARGOCD_DEPLOY_KEY_PRIVATE` | contents of [`.argocd-deploy-key`](./.argocd-deploy-key) | `terraform-apply.yml` only |
 | **Variable** | `PROJECT_ID` | your GCP project ID | all workflows |
 
-CLI shortcut:
+CLI shortcut (after `terraform apply` AND running `create-tf-runner.sh`):
 
 ```bash
 gh secret   set GCP_WIF_PROVIDER          --body "$(terraform output -raw github_actions_wif_provider)"
 gh secret   set GCP_SERVICE_ACCOUNT       --body "$(terraform output -raw github_actions_sa_email)"
-gh secret   set TF_RUNNER_SA              --body "$(terraform output -raw terraform_runner_sa_email)"
+gh secret   set TF_RUNNER_SA              --body "terraform-runner@$(terraform output -raw -json | jq -r .project_id // 'YOUR-PROJECT').iam.gserviceaccount.com"
 gh secret   set ARGOCD_DEPLOY_KEY_PRIVATE < infrastructure/terraform/.argocd-deploy-key
 gh variable set PROJECT_ID                --body "<your-project-id>"
 ```
 
 Two service accounts, two blast radii — never grant one SA both privileges:
 
-- **`github-actions-ci`** ← used by `ci.yml`. Only `roles/artifactregistry.writer` on `ecom-microservices`. Worst-case: rogue images in one AR repo.
-- **`terraform-runner`** ← used by the three terraform workflows. `roles/owner` on the project. Worst-case: someone with PR-merge rights can change/destroy any infra. The WIF `attribute_condition` pins both to *this repo's* OIDC tokens — random workflows on github.com can't mint tokens for either SA.
+- **`github-actions-ci`** ← used by `ci.yml`. Terraform-managed (`github_oidc.tf`). Only `roles/artifactregistry.writer` on `ecom-microservices`. Worst-case: rogue images in one AR repo.
+- **`terraform-runner`** ← used by the three terraform workflows. **Bootstrap-managed via gcloud, NOT terraform** (see scripts below). `roles/owner` on the project. Why outside terraform: the SA terraform CI impersonates can't be created by the terraform CI workflow that needs it — chicken-and-egg. The WIF `attribute_condition` pins both to *this repo's* OIDC tokens — random workflows on github.com can't mint tokens for either SA.
+
+#### Bootstrap / teardown of `terraform-runner` (manual, one-off)
+
+```bash
+# After `terraform apply` (which creates the WIF pool + provider):
+./scripts/create-tf-runner.sh   # idempotent; safe to re-run
+
+# Wire the GH secret:
+gh secret set TF_RUNNER_SA \
+  --repo aslamchandio/web-app-project \
+  --body "terraform-runner@<project-id>.iam.gserviceaccount.com"
+
+# To remove later (e.g. rotating to a fresh SA):
+./scripts/delete-tf-runner.sh
+```
+
+Both scripts read overrides from `PROJECT_ID`, `PROJECT_NUMBER`, `REPO` env vars; defaults are this project's values. Re-creating after delete within 30 days undeletes the soft-deleted SA (preserving the unique ID); after 30 days it creates fresh.
 
 The WIF provider is **repo-scoped** — only OIDC tokens from `var.github_repo` (e.g. `aslamchandio/web-app-project`) can mint tokens for the CI service account. The SA's only IAM grant is `roles/artifactregistry.writer` on the `ecom-microservices` repo (no project-wide permissions). If the workflow is ever compromised, blast radius is "can push images to one AR repo".
 
@@ -455,8 +472,9 @@ infrastructure/terraform/
 ├── iam.tf                     GKE node SA + workload SA + WI binding
 ├── argocd.tf                  Helm release of argo-cd chart (LB exposed, source-range locked)
 ├── argocd_application.tf      The "ecom" Application CR + time_sleep.argocd_cascade_grace
-├── github_oidc.tf             WIF pool + provider + github-actions-ci SA (image push)
-├── terraform_runner.tf        terraform-runner SA + project-owner role + WIF binding (for terraform CI workflows)
+├── github_oidc.tf             WIF pool + provider + github-actions-ci SA (image push only)
+│                              terraform-runner SA is bootstrapped separately by
+│                              scripts/create-tf-runner.sh (chicken-and-egg avoidance)
 ├── grafana.tf                 GSA + WI binding for the in-cluster GMP query proxy (Grafana auth)
 ├── secrets.tf                 Generated DB password + K8s Secret
 ├── secret_manager.tf          GSM secret entries (workload-identity readable)

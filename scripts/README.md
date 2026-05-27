@@ -5,6 +5,9 @@ Operational and dev-environment helpers. **Production deploys do NOT use these**
 | Script | Status | Purpose |
 |---|---|---|
 | [`init-multi-db.sh`](init-multi-db.sh) | **Active** | Postgres entrypoint hook for local `docker-compose` — creates `catalog` and `orders` databases on first boot |
+| [`render-diagrams.sh`](render-diagrams.sh) | **Active** | Renders Mermaid sources in `docs/diagrams/*.mmd` to PNG + SVG via Docker mermaid-cli (no local Node install needed) |
+| [`create-tf-runner.sh`](create-tf-runner.sh) | **Active (bootstrap)** | Idempotently creates the `terraform-runner` SA + `roles/owner` + WIF binding so the `terraform-{plan,apply,destroy}.yml` workflows can impersonate it. Lives outside terraform to break the chicken-and-egg (the SA the IaC CI uses can't be created by that same CI) |
+| [`delete-tf-runner.sh`](delete-tf-runner.sh) | **Active (bootstrap)** | Tears down what `create-tf-runner.sh` created. Soft-deletes the SA (30-day undelete) so re-running create-tf-runner.sh restores the same unique ID |
 | [`generate-images.py`](generate-images.py) | Optional | One-time OpenAI image generation for branded product photos (replaces FakeStore placeholders) |
 | [`build-and-push.sh`](build-and-push.sh) | **Legacy / escape hatch** | Manually build and push all 5 service images to Artifact Registry. Superseded by CI but kept for emergency / first-bootstrap use |
 | [`deploy.sh`](deploy.sh) | **Legacy / escape hatch** | Manually substitute image tags into `k8s/*.yaml` and `kubectl apply`. Superseded by ArgoCD GitOps but kept as a fallback |
