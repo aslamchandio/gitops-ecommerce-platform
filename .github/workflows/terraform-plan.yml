@@ -1,12 +1,13 @@
 name: Terraform Plan
 
-# Posts the plan as a PR comment on any change to infrastructure/terraform/**.
-# Also runnable manually for ad-hoc drift checks.
+# Triggered on PRs touching infra/CI. Runs fmt-check, validate, and a plan;
+# posts a sticky PR comment with the diff. Also dispatchable for ad-hoc
+# drift checks (skips the comment step — no PR to attach to).
 #
-# Read-only — `terraform plan` never mutates. The kubernetes_manifest resource
-# in argocd_application.tf requires a live cluster at plan time; until the
-# first apply has run, the plan body is correct but the run ends with
-# "cannot create REST client" — expected, not a regression.
+# Read-only — `terraform plan` never mutates. The kubernetes_manifest
+# resource in argocd_application.tf requires a live cluster at plan time;
+# until the first apply has run, the plan body is correct but the run ends
+# with "cannot create REST client" — expected, not a regression.
 
 on:
   pull_request:
@@ -21,12 +22,20 @@ permissions:
   id-token:      write   # WIF
   pull-requests: write   # post plan comment
 
+# Cancel superseded plans on the same PR; never cancel mid-run on main.
+concurrency:
+  group: terraform-plan-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
-  PROJECT_ID: ${{ vars.PROJECT_ID }}
+  PROJECT_ID:       ${{ vars.PROJECT_ID }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT:         "0"
 
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -36,46 +45,104 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
           project_id:      ${{ vars.PROJECT_ID }}
 
+      - name: terraform fmt -check
+        working-directory: infrastructure/terraform
+        run: terraform fmt -check -recursive -diff
+
       # Throwaway key so terraform's file() reference in argocd_application.tf
-      # resolves at plan time. Plan only diffs; the value is sensitive and
-      # never written anywhere real.
-      - name: Stub ArgoCD deploy key (plan only)
+      # resolves at plan time. Plan only diffs; the value is never used.
+      - name: Stub ArgoCD deploy key
         run: ssh-keygen -t ed25519 -C ci-plan-stub -f infrastructure/terraform/.argocd-deploy-key -N "" -q
 
-      - name: terraform init + plan
+      - name: terraform init
+        working-directory: infrastructure/terraform
+        run: terraform init -lock-timeout=120s
+
+      - name: terraform validate
+        working-directory: infrastructure/terraform
+        run: terraform validate -no-color
+
+      - name: terraform plan
         id: plan
         working-directory: infrastructure/terraform
-        continue-on-error: true   # keep going so we can comment on errors
+        continue-on-error: true   # capture exit code; gate is below
         env:
           TF_VAR_project_id:                 ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
         run: |
-          set -o pipefail
-          terraform init  -input=false -lock-timeout=120s
-          terraform plan  -input=false -lock-timeout=120s -no-color 2>&1 | tee /tmp/plan.txt
+          set +e
+          terraform plan -lock-timeout=120s -no-color -detailed-exitcode \
+            2>&1 | tee /tmp/plan.txt
+          # PIPESTATUS[0] is terraform's exit; tee's exit is always 0.
+          # detailed-exitcode: 0=no-changes, 1=error, 2=changes-pending
+          echo "exitcode=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
-      # Skip on workflow_dispatch (no PR to comment on)
-      - name: Post plan as PR comment
+      - name: Write plan to step summary
+        if: always()
+        run: |
+          EC="${{ steps.plan.outputs.exitcode }}"
+          case "$EC" in
+            0) STATUS="No changes" ;;
+            2) STATUS="Changes pending" ;;
+            *) STATUS="Plan failed (exit $EC)" ;;
+          esac
+          {
+            echo "## Terraform Plan — $STATUS"
+            echo '```hcl'
+            head -c 60000 /tmp/plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Sticky comment: update the previous bot comment if present so PRs
+      # don't accumulate one comment per push.
+      - name: Post / update PR comment
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO:      ${{ github.repository }}
+          EXIT_CODE: ${{ steps.plan.outputs.exitcode }}
+          HEAD_SHA:  ${{ github.event.pull_request.head.sha }}
+          RUN_URL:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          BODY="## Terraform Plan
-          \`\`\`
-          $(head -c 58000 /tmp/plan.txt)
-          \`\`\`"
-          jq -nc --arg body "$BODY" '{body: $body}' > /tmp/comment.json
-          curl -sfL -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d @/tmp/comment.json \
-            "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" >/dev/null
+          MARKER="<!-- terraform-plan-comment -->"
+          case "$EXIT_CODE" in
+            0) STATUS="No changes" ;;
+            2) STATUS="Changes pending" ;;
+            *) STATUS="Plan failed (exit $EXIT_CODE)" ;;
+          esac
 
-      - name: Fail the check if plan errored
-        if: steps.plan.outcome == 'failure'
+          PLAN_BODY=$(head -c 58000 /tmp/plan.txt)
+          BODY=$(cat <<EOF
+          $MARKER
+          ## Terraform Plan — $STATUS
+
+          <details><summary>Show plan</summary>
+
+          \`\`\`hcl
+          $PLAN_BODY
+          \`\`\`
+
+          </details>
+
+          _commit \`${HEAD_SHA:0:7}\` · [run #${{ github.run_number }}]($RUN_URL)_
+          EOF
+          )
+
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
+
+          if [[ -n "$EXISTING" ]]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING" -f body="$BODY" >/dev/null
+            echo "Updated comment $EXISTING"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$BODY" >/dev/null
+            echo "Created new comment"
+          fi
+
+      - name: Fail check on plan error
+        if: steps.plan.outputs.exitcode == '1'
         run: |
-          echo "::error::terraform plan failed — see logs / PR comment"
+          echo "::error::terraform plan failed — see step summary or PR comment"
           exit 1

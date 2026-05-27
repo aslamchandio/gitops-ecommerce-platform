@@ -1,10 +1,14 @@
 name: Terraform Destroy
 
-# DANGEROUS — destroys every GCP resource in the terraform state.
+# DANGEROUS — destroys every resource currently in the terraform state.
 # Type DESTROY-PROD-IT into the input to actually run.
-# The 5 destroy blockers (LB cleanup grace, SQL ABANDON, peering
-# cleanup, kubernetes provider try() fallbacks) are mitigated in code,
-# so a single-pass destroy is expected.
+#
+# -refresh=false skips the plan-time refresh that would otherwise have
+# kubernetes_manifest resources phone the GKE API for CRD schema
+# validation. From a GitHub-hosted runner that's a guaranteed timeout
+# against a private cluster master, and it blocks the entire destroy
+# graph even when the manifest isn't in state. State accuracy isn't a
+# concern during destroy — we want to delete everything in state.
 
 on:
   workflow_dispatch:
@@ -18,53 +22,83 @@ permissions:
   contents: read
   id-token: write
 
+# State-mutating workflows share this concurrency group — apply / destroy
+# can never run in parallel against the same state.
+concurrency:
+  group: terraform-state
+  cancel-in-progress: false
+
 env:
-  PROJECT_ID: ${{ vars.PROJECT_ID }}
+  PROJECT_ID:       ${{ vars.PROJECT_ID }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT:         "0"
 
 jobs:
   destroy:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     # Recommended: gate behind a GitHub Environment with required-reviewer rule.
     # environment: production-destroy
     if: ${{ inputs.confirm == 'DESTROY-PROD-IT' }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-tf-runner
+      - name: Authenticate (initial)
+        uses: ./.github/actions/setup-tf-runner
         with:
           wif_provider:    ${{ secrets.GCP_WIF_TF_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
           project_id:      ${{ vars.PROJECT_ID }}
 
-      # Same stub-key trick as terraform-plan — destroy doesn't push the key
-      # anywhere, but file() needs to resolve before the destroy graph builds.
+      # Stub key so terraform's file() reference in argocd_application.tf
+      # resolves at config-load time. Destroy never reads the value.
       - name: Stub ArgoCD deploy key
         run: ssh-keygen -t ed25519 -C ci-destroy-stub -f infrastructure/terraform/.argocd-deploy-key -N "" -q
 
-      - name: terraform init + destroy
+      - name: terraform init
+        working-directory: infrastructure/terraform
+        run: terraform init -lock-timeout=180s
+
+      # Show what's about to die — no surprises in the run summary.
+      - name: Pre-destroy preview
+        working-directory: infrastructure/terraform
+        run: |
+          {
+            echo "## Resources about to be destroyed"
+            echo '```'
+            terraform state list 2>&1 || echo "(state empty or unreadable)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: terraform destroy
         working-directory: infrastructure/terraform
         env:
           TF_VAR_project_id:                 ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
-        # -refresh=false skips the plan-time refresh that would otherwise
-        # have kubernetes_manifest resources phone the GKE API for CRD
-        # schema validation. From a GitHub-hosted runner that's a guaranteed
-        # timeout against a private cluster master, and it blocks the entire
-        # destroy graph even when the manifest itself isn't in state. State
-        # accuracy isn't a concern here — we want to delete everything.
-        run: |
-          terraform init    -input=false -lock-timeout=180s
-          terraform destroy -input=false -auto-approve -refresh=false -lock-timeout=600s
+        run: terraform destroy -auto-approve -refresh=false -lock-timeout=600s
+
+      # OIDC token may have aged out during a long destroy (cluster + LB
+      # teardown can run ~20 min). Re-auth before any gcloud call below.
+      - name: Re-authenticate (post-destroy)
+        if: always()
+        uses: ./.github/actions/setup-tf-runner
+        with:
+          wif_provider:    ${{ secrets.GCP_WIF_TF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
+          project_id:      ${{ vars.PROJECT_ID }}
 
       - name: Post-destroy sanity check
         if: always()
         run: |
           set +e
-          echo "---REMAINING GKE CLUSTERS---"
-          gcloud container clusters list 2>&1 | head -5
-          echo "---REMAINING CLOUD SQL---"
-          gcloud sql instances list 2>&1 | head -5
-          echo "---REMAINING REDIS---"
-          gcloud redis instances list --region=us-central1 2>&1 | head -5
-          echo "---REMAINING VPC---"
-          gcloud compute networks list 2>&1 | head -5
+          {
+            echo "## Post-destroy GCP sanity check"
+            echo "### GKE clusters"
+            echo '```'; gcloud container clusters list 2>&1 | head -5; echo '```'
+            echo "### Cloud SQL instances"
+            echo '```'; gcloud sql instances list 2>&1 | head -5; echo '```'
+            echo "### Redis instances (us-central1)"
+            echo '```'; gcloud redis instances list --region=us-central1 2>&1 | head -5; echo '```'
+            echo "### VPC networks"
+            echo '```'; gcloud compute networks list 2>&1 | head -5; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

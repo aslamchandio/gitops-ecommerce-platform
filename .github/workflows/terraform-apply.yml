@@ -1,8 +1,16 @@
 name: Terraform Apply
 
 # Manual dispatch only — type APPLY into the input to actually run.
-# Two-step bootstrap: -target=cluster + helm first so kubernetes_manifest
-# can plan, then full apply.
+#
+# Two-step bootstrap: -target=cluster + node-pool + helm-argocd first
+# so kubernetes_manifest can plan against live CRDs, then a full apply.
+# The bootstrap will emit "Resource targeting is in effect" warnings —
+# those are expected and resolved by step 2.
+#
+# Long applies can exceed the WIF/OIDC token lifetime (~1h). The composite
+# action is re-invoked between long-running steps so subsequent gcloud /
+# terraform calls authenticate with a fresh access token. Without this,
+# post-apply steps fail with "invalid_grant ... ID Token is stale".
 
 on:
   workflow_dispatch:
@@ -12,7 +20,7 @@ on:
         required: true
         type: string
       target_only:
-        description: 'Run ONLY the targeted bootstrap (cluster + helm) — skip step 2'
+        description: 'Run ONLY the targeted bootstrap (skip full apply)'
         required: false
         default: false
         type: boolean
@@ -21,27 +29,37 @@ permissions:
   contents: read
   id-token: write
 
+# State-mutating workflows share this concurrency group — apply / destroy
+# can never run in parallel against the same state.
+concurrency:
+  group: terraform-state
+  cancel-in-progress: false
+
 env:
-  PROJECT_ID: ${{ vars.PROJECT_ID }}
+  PROJECT_ID:       ${{ vars.PROJECT_ID }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT:         "0"
 
 jobs:
   apply:
     runs-on: ubuntu-latest
-    # Optional: gate behind a GitHub Environment with required-reviewer rule.
+    timeout-minutes: 75
+    # Recommended: gate behind a GitHub Environment with required-reviewer rule.
     # environment: production
     if: ${{ inputs.confirm == 'APPLY' }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup-tf-runner
+      - name: Authenticate (initial)
+        uses: ./.github/actions/setup-tf-runner
         with:
           wif_provider:    ${{ secrets.GCP_WIF_TF_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
           project_id:      ${{ vars.PROJECT_ID }}
 
-      # Real deploy key written from secret. argocd_application.tf reads it
-      # via file() and stores it in a K8s Secret so ArgoCD can pull from the
-      # gitops repo. Generate the secret with:
+      # Real deploy key from secret. argocd_application.tf reads it via file()
+      # and stores it in a K8s Secret so ArgoCD can pull from the gitops repo.
+      # Generate the secret once with:
       #   gh secret set ARGOCD_DEPLOY_KEY_PRIVATE < infrastructure/terraform/.argocd-deploy-key
       - name: Materialize ArgoCD deploy key
         env:
@@ -58,7 +76,7 @@ jobs:
 
       - name: terraform init
         working-directory: infrastructure/terraform
-        run: terraform init -input=false -lock-timeout=180s
+        run: terraform init -lock-timeout=180s
 
       # Step 1: bring up cluster + ArgoCD so kubernetes_manifest can plan.
       - name: terraform apply (step 1 — bootstrap)
@@ -67,21 +85,45 @@ jobs:
           TF_VAR_project_id:                 ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
         run: |
-          terraform apply -input=false -auto-approve -lock-timeout=300s \
+          terraform apply -auto-approve -lock-timeout=300s \
             -target=google_container_cluster.primary \
             -target=google_container_node_pool.system \
             -target=helm_release.argocd
 
-      # Step 2: full apply (skip if target_only=true).
+      # OIDC token may have aged out during the bootstrap (~1h limit).
+      - name: Re-authenticate (post-bootstrap)
+        if: ${{ inputs.target_only != true }}
+        uses: ./.github/actions/setup-tf-runner
+        with:
+          wif_provider:    ${{ secrets.GCP_WIF_TF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
+          project_id:      ${{ vars.PROJECT_ID }}
+
       - name: terraform apply (step 2 — full)
         if: ${{ inputs.target_only != true }}
         working-directory: infrastructure/terraform
         env:
           TF_VAR_project_id:                 ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
-        run: terraform apply -input=false -auto-approve -lock-timeout=300s
+        run: terraform apply -auto-approve -lock-timeout=300s
 
-      - name: terraform output
+      # Re-auth again so terraform output / step summary doesn't die on a
+      # stale token if step 2 also ran long.
+      - name: Re-authenticate (post-apply)
+        if: always()
+        uses: ./.github/actions/setup-tf-runner
+        with:
+          wif_provider:    ${{ secrets.GCP_WIF_TF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
+          project_id:      ${{ vars.PROJECT_ID }}
+
+      - name: terraform output → step summary
         if: always()
         working-directory: infrastructure/terraform
-        run: terraform output -no-color || true
+        run: |
+          {
+            echo "## Terraform Outputs"
+            echo '```'
+            terraform output -no-color 2>&1 || echo "(no outputs / state inaccessible)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
