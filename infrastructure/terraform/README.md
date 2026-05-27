@@ -166,22 +166,28 @@ Takes ~15 minutes the first time (GKE cluster + Cloud SQL are the slow ones). Th
 
 ### 3. Wire GitHub Actions to GCP
 
-Values that land in the repo's **Settings → Secrets and variables → Actions**:
+Values that land in the repo's **Settings → Secrets and variables → Actions**. Each pair of `WIF_PROVIDER` + `SERVICE_ACCOUNT` secrets belongs to one workflow's identity — the naming distinguishes them: the bare names are for image-push (`ci.yml`), the `_TF_` infixed ones are for IaC (`terraform-*.yml`).
 
 | Setting type | Name | Value | Used by |
 |---|---|---|---|
-| Secret | `GCP_WIF_PROVIDER`  | `terraform output github_actions_wif_provider` | all workflows |
+| Secret | `GCP_WIF_PROVIDER`  | `terraform output github_actions_wif_provider` | `ci.yml` |
 | Secret | `GCP_SERVICE_ACCOUNT` | `terraform output github_actions_sa_email` | `ci.yml` (image build/push — Artifact Registry writer only) |
-| Secret | `TF_RUNNER_SA` | `terraform-runner@<project>.iam.gserviceaccount.com` (created by [`scripts/create-tf-runner.sh`](../../scripts/create-tf-runner.sh) — see below) | `terraform-plan.yml`, `terraform-apply.yml`, `terraform-destroy.yml` |
+| Secret | `GCP_WIF_TF_PROVIDER` | full provider path (printed by [`create-tf-runner.sh`](../../scripts/create-tf-runner.sh)) | `terraform-plan.yml`, `terraform-apply.yml`, `terraform-destroy.yml` |
+| Secret | `GCP_SERVICE_TF_ACCOUNT` | `terraform-runner@<project>.iam.gserviceaccount.com` (printed by [`create-tf-runner.sh`](../../scripts/create-tf-runner.sh)) | `terraform-plan.yml`, `terraform-apply.yml`, `terraform-destroy.yml` |
 | Secret | `ARGOCD_DEPLOY_KEY_PRIVATE` | contents of [`.argocd-deploy-key`](./.argocd-deploy-key) | `terraform-apply.yml` only |
 | **Variable** | `PROJECT_ID` | your GCP project ID | all workflows |
 
 CLI shortcut (after `terraform apply` AND running `create-tf-runner.sh`):
 
 ```bash
+# Image-push pair (ci.yml)
 gh secret   set GCP_WIF_PROVIDER          --body "$(terraform output -raw github_actions_wif_provider)"
 gh secret   set GCP_SERVICE_ACCOUNT       --body "$(terraform output -raw github_actions_sa_email)"
-gh secret   set TF_RUNNER_SA              --body "terraform-runner@$(terraform output -raw -json | jq -r .project_id // 'YOUR-PROJECT').iam.gserviceaccount.com"
+
+# Terraform pair (terraform-*.yml) — create-tf-runner.sh prints these exact lines
+gh secret   set GCP_WIF_TF_PROVIDER       --body "projects/<NUMBER>/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+gh secret   set GCP_SERVICE_TF_ACCOUNT    --body "terraform-runner@<project-id>.iam.gserviceaccount.com"
+
 gh secret   set ARGOCD_DEPLOY_KEY_PRIVATE < infrastructure/terraform/.argocd-deploy-key
 gh variable set PROJECT_ID                --body "<your-project-id>"
 ```

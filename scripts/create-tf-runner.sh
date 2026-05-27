@@ -25,8 +25,9 @@
 #   PROJECT_ID=foo PROJECT_NUMBER=123 REPO=owner/repo \
 #     ./scripts/create-tf-runner.sh
 #
-# After running, set the GitHub secret:
-#   gh secret set TF_RUNNER_SA --repo "$REPO" --body "$SA_EMAIL"
+# After running, set the GitHub secrets used by .github/workflows/terraform-*.yml:
+#   gh secret set GCP_SERVICE_TF_ACCOUNT --repo "$REPO" --body "$SA_EMAIL"
+#   gh secret set GCP_WIF_TF_PROVIDER    --repo "$REPO" --body "$WIF_PROVIDER_PATH"
 # =============================================================================
 
 set -euo pipefail
@@ -155,9 +156,13 @@ echo "  bound"
 
 echo ""
 echo "===== Done ====="
-echo "Set the GitHub secret so the workflows can impersonate the SA:"
-echo "  gh secret set TF_RUNNER_SA --repo '$REPO' --body '$SA_EMAIL'"
+echo "Set the GitHub secrets used by .github/workflows/terraform-*.yml:"
 echo ""
-echo "And (if not already set):"
-echo "  gh secret set GCP_WIF_PROVIDER --repo '$REPO' \\"
+echo "  gh secret set GCP_SERVICE_TF_ACCOUNT --repo '$REPO' \\"
+echo "    --body '$SA_EMAIL'"
+echo ""
+echo "  gh secret set GCP_WIF_TF_PROVIDER --repo '$REPO' \\"
 echo "    --body 'projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}'"
+echo ""
+echo "(The image-push workflow ci.yml uses separate secrets GCP_SERVICE_ACCOUNT"
+echo " and GCP_WIF_PROVIDER — leave those alone; they belong to github-actions-ci.)"

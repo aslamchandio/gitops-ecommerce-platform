@@ -52,8 +52,8 @@ jobs:
 
       - name: Authenticate to GCP (WIF → terraform-runner)
         env:
-          WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
-          SA_EMAIL:     ${{ secrets.TF_RUNNER_SA }}
+          WIF_PROVIDER: ${{ secrets.GCP_WIF_TF_PROVIDER }}
+          SA_EMAIL:     ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
         run: |
           set -euo pipefail
           OIDC_FILE=$(mktemp); chmod 600 "$OIDC_FILE"
