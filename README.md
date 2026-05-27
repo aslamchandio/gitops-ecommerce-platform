@@ -10,7 +10,7 @@ A polyglot microservices storefront that ingests products from the public [FakeS
 
 - **5 services**, three runtimes — Go (catalog), Spring Boot 3 (cart / order / ui), Node.js 20 (checkout).
 - **GitOps end-to-end** — push a tag, the cluster updates itself. No `kubectl apply` in any developer workflow.
-- **Keyless CI** — GitHub Actions authenticates to GCP via Workload Identity Federation. No JSON keys anywhere.
+- **Keyless CI for both code AND infra** — GitHub Actions authenticates to GCP via Workload Identity Federation. Two distinct SAs (`github-actions-ci` for image push, `terraform-runner` for IaC) so a CI compromise can't touch infra and an IaC compromise can't push rogue images. No JSON keys anywhere.
 - **SHA-pinned releases** — every release pins immutable image digests in `k8s/*.yaml`; rollback is `git revert`.
 - **Three-layer cache enforcement** — Spring filter + GKE Gateway `ResponseHeaderModifier` + CI smoke test, so a UI deploy is **instantly visible** to every user without browser tricks.
 - **In-cluster observability** — Google Managed Prometheus scrapes every service's `/actuator/prometheus` + cAdvisor + kube-state-metrics; Grafana runs in-cluster, queries GMP via a Workload-Identity-authed proxy (no GCP creds in Grafana), ships a starter Spring Boot dashboard + the [grafana.com/15661](https://grafana.com/grafana/dashboards/15661) K8s dashboard pre-loaded.
@@ -87,7 +87,7 @@ This provisions:
 | Ingress            | Reserved global IP · Cert Manager certificate + CertificateMap            |
 | GitOps             | ArgoCD via Helm chart `9.5.15` (ships ArgoCD v3.4.2)                     |
 | ArgoCD app         | `ecom` Application: auto-sync, prune, self-heal · ignoreDifferences for GKE NEG annotations |
-| CI identity        | Workload Identity Federation pool + GitHub OIDC provider · SA scoped to Artifact Registry only |
+| CI identities      | Single WIF pool + GitHub OIDC provider, two service accounts bound to it: `github-actions-ci` (Artifact Registry writer, used by `ci.yml`) and `terraform-runner` (project owner, used by the three terraform workflows). Both pinned to this repo via `attribute_condition`. |
 | Observability      | GMP enabled on the cluster · 9 managed scrape components (SYSTEM_COMPONENTS + CADVISOR + KUBELET + STORAGE + POD + DEPLOYMENT + STATEFULSET + DAEMONSET + HPA) · GSA `grafana-gmp-reader` (monitoring.viewer) bound via WI to the in-cluster `gmp-frontend` KSA |
 
 See [`infrastructure/terraform/README.md`](infrastructure/terraform/README.md) for the full module-by-module rundown.
@@ -105,7 +105,7 @@ gh variable set PROJECT_ID          --body "<your-project-id>"
 - `GCP_WIF_PROVIDER` + `GCP_SERVICE_ACCOUNT` are **secrets** — masked in logs.
 - `PROJECT_ID` is a **variable** — project IDs aren't sensitive (they appear in every image URL), and storing it as a variable means you can change the target project from the UI without a commit.
 
-The WIF provider is **repo-scoped** via an `attribute_condition` — only OIDC tokens from `aslamchandio/web-app-project` can mint tokens for the CI service account. The SA's only IAM grant is `roles/artifactregistry.writer` on the `ecom-microservices` repo (no project-wide permissions).
+The WIF provider is **repo-scoped** via an `attribute_condition` — only OIDC tokens from `aslamchandio/web-app-project` can mint tokens for either service account. `github-actions-ci`'s only IAM grant is `roles/artifactregistry.writer` on the `ecom-microservices` repo (used by `ci.yml`). `terraform-runner` has `roles/owner` on the project (used by the terraform-plan / -apply / -destroy workflows). Splitting them caps the blast radius: a leaked CI token can push rogue images but can't reach infra, and vice versa.
 
 ### 3. Cut a release
 
@@ -214,7 +214,11 @@ kubectl create configmap grafana-dashboards-<name> \
 │   ├── 96-grafana.yaml             Grafana 11.3.1 + PVC + datasource + provisioned starter dashboard
 │   └── 97-grafana-dashboard-k8s.yaml  K8S Dashboard (grafana.com/15661) as ConfigMap
 │
-├── .github/workflows/ci.yml        Build → push → bump-manifests, with cache-header regression test
+├── .github/workflows/
+│   ├── ci.yml                      App pipeline: build → push → bump-manifests, with cache-header regression test
+│   ├── terraform-plan.yml          IaC pipeline: PR-triggered, posts plan as PR comment
+│   ├── terraform-apply.yml         IaC pipeline: manual dispatch, typed "APPLY" confirm, two-step bootstrap
+│   └── terraform-destroy.yml       IaC pipeline: manual dispatch, typed "DESTROY-PROD-IT" confirm + post-destroy sanity check
 ├── docker-compose.yml              Local dev stack
 └── scripts/                        Helpers (db init, image generation)
 ```
@@ -258,7 +262,7 @@ Spring Boot + Thymeleaf storefront with a vibrant top-nav layout. Includes:
 
 **Infrastructure:** Terraform · GKE Standard + NAP + Gateway API · Cloud SQL · Memorystore Redis · Artifact Registry · Cloud Certificate Manager · Cloud NAT
 
-**Delivery:** GitHub Actions · Workload Identity Federation · ArgoCD (Helm chart 9.5.15 → ArgoCD v3.4.2) · docker buildx with GHA cache
+**Delivery:** GitHub Actions (one app pipeline + three IaC pipelines: plan/apply/destroy) · Workload Identity Federation (two scoped SAs) · ArgoCD (Helm chart 9.5.15 → ArgoCD v3.4.2) · docker buildx with GHA cache
 
 **Observability:** Spring Boot Actuator (`/actuator/health/readiness` + `/actuator/prometheus`) · Micrometer Prometheus registry on the 3 Java services · Google Managed Prometheus (CADVISOR + KUBELET + STORAGE + kube-state-metrics components) · in-cluster Grafana 11.3.1 with GMP-frontend auth proxy (Workload Identity, no JSON keys) · provisioned Spring Boot starter dashboard + K8s overview dashboard ([grafana.com/15661](https://grafana.com/grafana/dashboards/15661)) · Cloud Logging
 
