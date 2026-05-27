@@ -1,0 +1,134 @@
+name: Terraform Plan
+
+# Runs on every PR touching infrastructure/terraform/ or this file. Posts
+# the plan as a PR comment so changes are reviewable before merge.
+#
+# Read-only — the SA impersonated here (terraform-runner) has broad
+# project rights, but `terraform plan` itself never mutates anything.
+# Real changes happen via terraform-apply.yml (manual dispatch).
+#
+# kubernetes_manifest.ecom_application requires a live cluster at plan
+# time (it fetches the cluster's OpenAPI to validate the manifest). If
+# the cluster doesn't exist yet, the plan output will end with a
+# "cannot create REST client" error after the rest of the plan body.
+# That's expected during pre-bootstrap PRs — first apply must be done
+# manually or via terraform-apply.yml.
+
+on:
+  pull_request:
+    paths:
+      - 'infrastructure/terraform/**'
+      - '.github/workflows/terraform-*.yml'
+
+permissions:
+  contents:      read
+  id-token:      write   # WIF
+  pull-requests: write   # post plan comment
+
+env:
+  PROJECT_ID: ${{ vars.PROJECT_ID }}
+  TF_VERSION: "1.9.8"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ----- terraform CLI via HashiCorp apt (no codeload dependency) -----
+      - name: Install terraform ${{ env.TF_VERSION }}
+        run: |
+          set -euo pipefail
+          curl -fsSL https://apt.releases.hashicorp.com/gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
+          sudo apt-get update -q
+          sudo apt-get install -y "terraform=${{ env.TF_VERSION }}-1"
+          terraform version
+
+      # ----- WIF -> terraform-runner SA (gcloud-native, surfaces errors) -----
+      - name: Authenticate to GCP (WIF → terraform-runner)
+        env:
+          WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
+          SA_EMAIL:     ${{ secrets.TF_RUNNER_SA }}
+        run: |
+          set -euo pipefail
+          OIDC_FILE=$(mktemp); chmod 600 "$OIDC_FILE"
+          curl -sfH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://iam.googleapis.com/${WIF_PROVIDER}" \
+            | jq -er .value > "$OIDC_FILE"
+          CRED_FILE=$(mktemp --suffix=.json); chmod 600 "$CRED_FILE"
+          cat > "$CRED_FILE" <<EOF
+          {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/${WIF_PROVIDER}",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA_EMAIL}:generateAccessToken",
+            "credential_source": { "file": "${OIDC_FILE}", "format": { "type": "text" } }
+          }
+          EOF
+          gcloud auth login --cred-file="$CRED_FILE" --quiet
+          gcloud config set project "$PROJECT_ID" --quiet
+          # ADC for terraform's google provider
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${CRED_FILE}" >> "$GITHUB_ENV"
+
+      # ----- throwaway SSH key so file() in argocd_application.tf resolves -----
+      # The real deploy key isn't needed for plan (its bytes flow through
+      # to a Secret manifest but plan only diffs; the value is marked
+      # sensitive). Generating a per-run throwaway key here keeps the
+      # workflow self-contained.
+      - name: Stub deploy key (plan only)
+        run: |
+          ssh-keygen -t ed25519 -C "ci-plan-stub" \
+            -f infrastructure/terraform/.argocd-deploy-key -N "" -q
+
+      # ----- terraform init + plan -----
+      - name: terraform init
+        working-directory: infrastructure/terraform
+        run: terraform init -input=false -lock-timeout=120s
+
+      - name: terraform plan
+        id: plan
+        working-directory: infrastructure/terraform
+        continue-on-error: true   # keep going so we can comment even on error
+        env:
+          # Override the home-IP master_authorized_networks at CI time.
+          # GitHub-hosted runners don't have a stable egress IP, so plan
+          # uses an empty list here. (If you ever apply from CI, pair
+          # this with the DNS endpoint to keep kubectl access working.)
+          TF_VAR_master_authorized_networks: '[]'
+        run: |
+          set -o pipefail
+          terraform plan -no-color -input=false -lock-timeout=120s 2>&1 \
+            | tee /tmp/plan.txt
+
+      # ----- post plan output as PR comment -----
+      - name: Post plan as PR comment
+        env:
+          GH_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO:      ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Trim to keep under the ~65k PR comment cap, then JSON-escape
+          # via jq so quotes / newlines / backticks survive the round-trip.
+          HEAD_BYTES=58000
+          BODY="## Terraform Plan
+          \`\`\`
+          $(head -c $HEAD_BYTES /tmp/plan.txt)
+          \`\`\`"
+          jq -nc --arg body "$BODY" '{body: $body}' > /tmp/comment.json
+          curl -sfL -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d @/tmp/comment.json \
+            "https://api.github.com/repos/$REPO/issues/$PR_NUMBER/comments" \
+            >/dev/null
+
+      - name: Fail the check if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "::error::terraform plan failed — see PR comment for details"
+          exit 1

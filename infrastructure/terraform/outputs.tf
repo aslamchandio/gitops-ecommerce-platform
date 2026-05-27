@@ -61,3 +61,8 @@ output "github_actions_sa_email" {
   description = "Paste this into GitHub Actions secret GCP_SERVICE_ACCOUNT."
   value       = google_service_account.github_actions.email
 }
+
+output "terraform_runner_sa_email" {
+  description = "Paste this into GitHub Actions secret TF_RUNNER_SA — used by the terraform plan/apply/destroy workflows."
+  value       = google_service_account.terraform_runner.email
+}

@@ -166,21 +166,30 @@ Takes ~15 minutes the first time (GKE cluster + Cloud SQL are the slow ones). Th
 
 ### 3. Wire GitHub Actions to GCP
 
-Three values land in the repo's **Settings → Secrets and variables → Actions**:
+Values that land in the repo's **Settings → Secrets and variables → Actions**:
 
-| Setting type | Name | Value (terraform output) | Why this type |
+| Setting type | Name | Value | Used by |
 |---|---|---|---|
-| Secret | `GCP_WIF_PROVIDER`  | `terraform output github_actions_wif_provider` | URL identifies your pool/provider — kept masked |
-| Secret | `GCP_SERVICE_ACCOUNT` | `terraform output github_actions_sa_email` | SA email — kept masked |
-| **Variable** | `PROJECT_ID` | `terraform output -raw -json | jq -r .project_id.value` (or just the value of `var.project_id`) | Not sensitive (visible in image URLs anyway) and you'll want to edit it without a commit |
+| Secret | `GCP_WIF_PROVIDER`  | `terraform output github_actions_wif_provider` | all workflows |
+| Secret | `GCP_SERVICE_ACCOUNT` | `terraform output github_actions_sa_email` | `ci.yml` (image build/push — Artifact Registry writer only) |
+| Secret | `TF_RUNNER_SA` | `terraform output terraform_runner_sa_email` | `terraform-plan.yml`, `terraform-apply.yml`, `terraform-destroy.yml` |
+| Secret | `ARGOCD_DEPLOY_KEY_PRIVATE` | contents of [`.argocd-deploy-key`](./.argocd-deploy-key) | `terraform-apply.yml` only |
+| **Variable** | `PROJECT_ID` | your GCP project ID | all workflows |
 
 CLI shortcut:
 
 ```bash
-gh secret   set GCP_WIF_PROVIDER    --body "$(terraform output -raw github_actions_wif_provider)"
-gh secret   set GCP_SERVICE_ACCOUNT --body "$(terraform output -raw github_actions_sa_email)"
-gh variable set PROJECT_ID          --body "<your-project-id>"
+gh secret   set GCP_WIF_PROVIDER          --body "$(terraform output -raw github_actions_wif_provider)"
+gh secret   set GCP_SERVICE_ACCOUNT       --body "$(terraform output -raw github_actions_sa_email)"
+gh secret   set TF_RUNNER_SA              --body "$(terraform output -raw terraform_runner_sa_email)"
+gh secret   set ARGOCD_DEPLOY_KEY_PRIVATE < infrastructure/terraform/.argocd-deploy-key
+gh variable set PROJECT_ID                --body "<your-project-id>"
 ```
+
+Two service accounts, two blast radii — never grant one SA both privileges:
+
+- **`github-actions-ci`** ← used by `ci.yml`. Only `roles/artifactregistry.writer` on `ecom-microservices`. Worst-case: rogue images in one AR repo.
+- **`terraform-runner`** ← used by the three terraform workflows. `roles/owner` on the project. Worst-case: someone with PR-merge rights can change/destroy any infra. The WIF `attribute_condition` pins both to *this repo's* OIDC tokens — random workflows on github.com can't mint tokens for either SA.
 
 The WIF provider is **repo-scoped** — only OIDC tokens from `var.github_repo` (e.g. `aslamchandio/web-app-project`) can mint tokens for the CI service account. The SA's only IAM grant is `roles/artifactregistry.writer` on the `ecom-microservices` repo (no project-wide permissions). If the workflow is ever compromised, blast radius is "can push images to one AR repo".
 
@@ -191,6 +200,26 @@ terraform output gateway_ip                # → A record for var.domain
 ```
 
 Point your domain's A record at the printed IP. The Gateway is pinned to this reserved IP, so it survives cluster recreations.
+
+### Terraform via GitHub Actions (optional)
+
+Three workflows in [`.github/workflows/`](../../.github/workflows/) let you run terraform without a laptop. All use the dedicated `terraform-runner` SA via WIF (no JSON keys).
+
+| Workflow | Trigger | Confirmation | Notes |
+|---|---|---|---|
+| [`terraform-plan.yml`](../../.github/workflows/terraform-plan.yml) | `pull_request` touching `infrastructure/terraform/**` | none — read-only | Posts the plan as a PR comment. Stubs the ArgoCD key with a throwaway since plan never pushes it. |
+| [`terraform-apply.yml`](../../.github/workflows/terraform-apply.yml) | `workflow_dispatch` | type **`APPLY`** in the input | Two-step bootstrap: `-target` cluster + helm release first (so `kubernetes_manifest` can plan), then full apply. Materializes the real deploy key from `ARGOCD_DEPLOY_KEY_PRIVATE`. |
+| [`terraform-destroy.yml`](../../.github/workflows/terraform-destroy.yml) | `workflow_dispatch` | type **`DESTROY-PROD-IT`** in the input | Posts a sanity check after destroy (lists any remaining GKE / SQL / Redis / VPC resources). |
+
+**Recommended hardening before you trust apply / destroy:**
+
+1. **GitHub Environments** — under repo Settings → Environments, create `production` and `production-destroy`, each with a required-reviewer rule (yourself or a co-owner). Uncomment the `environment:` line in the corresponding workflow. Now CLI confirmation **and** a UI click are needed.
+
+2. **Branch protection on `main`** — require PR review + passing `terraform-plan` check before merge. Combined with the manual apply trigger this means no IaC change can reach production without (a) human-reviewed diff and (b) human-clicked apply.
+
+3. **Plan-only first** — run `terraform-apply.yml` with `target_only = true` to provision just the cluster + helm release, then re-run with `target_only = false` for the full apply. Avoids surprises on first deploy.
+
+CI-vs-laptop tradeoff: laptop apply is simpler (`terraform apply` from `infrastructure/terraform/`) but mixes "who applied" with "who's at the keyboard". CI apply gives an audit trail (workflow run logs are forever) and forces every change through a PR. Use whichever fits your workflow — both still talk to the same GCS state, so they don't conflict.
 
 ### 5. First release
 
@@ -426,7 +455,8 @@ infrastructure/terraform/
 ├── iam.tf                     GKE node SA + workload SA + WI binding
 ├── argocd.tf                  Helm release of argo-cd chart (LB exposed, source-range locked)
 ├── argocd_application.tf      The "ecom" Application CR + time_sleep.argocd_cascade_grace
-├── github_oidc.tf             WIF pool + provider + repo-scoped service account
+├── github_oidc.tf             WIF pool + provider + github-actions-ci SA (image push)
+├── terraform_runner.tf        terraform-runner SA + project-owner role + WIF binding (for terraform CI workflows)
 ├── grafana.tf                 GSA + WI binding for the in-cluster GMP query proxy (Grafana auth)
 ├── secrets.tf                 Generated DB password + K8s Secret
 ├── secret_manager.tf          GSM secret entries (workload-identity readable)
