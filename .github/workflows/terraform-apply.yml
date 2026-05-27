@@ -110,6 +110,7 @@ jobs:
       - name: terraform apply (step 1 — bootstrap)
         working-directory: infrastructure/terraform
         env:
+          TF_VAR_project_id: ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
         run: |
           set -euo pipefail
@@ -123,6 +124,7 @@ jobs:
         if: ${{ inputs.target_only != true }}
         working-directory: infrastructure/terraform
         env:
+          TF_VAR_project_id: ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
         run: |
           set -euo pipefail

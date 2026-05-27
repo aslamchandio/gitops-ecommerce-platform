@@ -90,6 +90,7 @@ jobs:
       - name: terraform destroy
         working-directory: infrastructure/terraform
         env:
+          TF_VAR_project_id: ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
         run: |
           set -euo pipefail

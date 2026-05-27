@@ -30,6 +30,11 @@ vendor/
 *.tfstate.backup
 *.tfvars
 !terraform.tfvars.example
+# terraform.auto.tfvars is committed: terraform auto-loads it as defaults
+# for CI / shared use, while a local terraform.tfvars (gitignored, for
+# personal overrides like master_authorized_networks) still wins via
+# variable precedence.
+!terraform.auto.tfvars
 # Plan files contain rendered values including sensitive ones — never commit
 tfplan
 *.tfplan

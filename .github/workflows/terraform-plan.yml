@@ -97,10 +97,11 @@ jobs:
         working-directory: infrastructure/terraform
         continue-on-error: true   # keep going so we can comment even on error
         env:
-          # Override the home-IP master_authorized_networks at CI time.
-          # GitHub-hosted runners don't have a stable egress IP, so plan
-          # uses an empty list here. (If you ever apply from CI, pair
-          # this with the DNS endpoint to keep kubectl access working.)
+          # project_id + master_authorized_networks are deliberately kept
+          # out of terraform.auto.tfvars (sourced from GH vars / unset
+          # per-CI). Everything else terraform plan needs is in that
+          # auto-loaded committed file.
+          TF_VAR_project_id: ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
         run: |
           set -o pipefail
