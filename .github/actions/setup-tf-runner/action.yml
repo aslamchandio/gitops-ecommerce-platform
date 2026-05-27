@@ -1,0 +1,73 @@
+# =============================================================================
+# Composite action shared by the three terraform-*.yml workflows.
+#
+# Installs the terraform CLI (from HashiCorp's apt repo) and authenticates
+# to GCP via Workload Identity Federation by impersonating the terraform-runner
+# service account. Sets GOOGLE_APPLICATION_CREDENTIALS so subsequent
+# `terraform init/plan/apply/destroy` steps in the calling job pick it up.
+#
+# Why a composite action instead of a workflow_call reusable workflow:
+#   - Stays in the same job (workflow_call would spin up a new runner)
+#   - No third-party action downloads (codeload 404 history)
+#   - Inputs are typed and discoverable in one place
+# =============================================================================
+
+name: Setup terraform-runner
+description: Install terraform CLI + authenticate to GCP via WIF as terraform-runner
+
+inputs:
+  wif_provider:
+    description: Full WIF provider path (projects/N/locations/global/workloadIdentityPools/.../providers/...)
+    required: true
+  service_account:
+    description: Service account email to impersonate (terraform-runner@...)
+    required: true
+  project_id:
+    description: GCP project ID
+    required: true
+  terraform_version:
+    description: Terraform version to install
+    required: false
+    default: "1.9.8"
+
+runs:
+  using: composite
+  steps:
+    - name: Install terraform ${{ inputs.terraform_version }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -fsSL https://apt.releases.hashicorp.com/gpg \
+          | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+          | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
+        sudo apt-get update -q
+        sudo apt-get install -y "terraform=${{ inputs.terraform_version }}-1"
+        terraform version
+
+    - name: Authenticate to GCP (WIF → ${{ inputs.service_account }})
+      shell: bash
+      env:
+        WIF_PROVIDER: ${{ inputs.wif_provider }}
+        SA_EMAIL:     ${{ inputs.service_account }}
+        PROJECT_ID:   ${{ inputs.project_id }}
+      run: |
+        set -euo pipefail
+        OIDC_FILE=$(mktemp); chmod 600 "$OIDC_FILE"
+        curl -sfH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://iam.googleapis.com/${WIF_PROVIDER}" \
+          | jq -er .value > "$OIDC_FILE"
+        CRED_FILE=$(mktemp --suffix=.json); chmod 600 "$CRED_FILE"
+        cat > "$CRED_FILE" <<EOF
+        {
+          "type": "external_account",
+          "audience": "//iam.googleapis.com/${WIF_PROVIDER}",
+          "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+          "token_url": "https://sts.googleapis.com/v1/token",
+          "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA_EMAIL}:generateAccessToken",
+          "credential_source": { "file": "${OIDC_FILE}", "format": { "type": "text" } }
+        }
+        EOF
+        gcloud auth login --cred-file="$CRED_FILE" --quiet
+        gcloud config set project "$PROJECT_ID" --quiet
+        echo "GOOGLE_APPLICATION_CREDENTIALS=${CRED_FILE}" >> "$GITHUB_ENV"

@@ -1,17 +1,10 @@
 name: Terraform Destroy
 
 # DANGEROUS — destroys every GCP resource in the terraform state.
-#
-# Two confirmations required:
-#   1. workflow_dispatch input must equal "DESTROY-PROD-IT" exactly
-#   2. (optional but recommended) gate the job behind a GitHub
-#      Environment with required-reviewer protection. See
-#      Repo Settings -> Environments -> production-destroy.
-#
-# After destroy succeeds, manually verify with:
-#   gcloud container clusters list
-#   gcloud sql instances list
-#   gcloud compute networks list
+# Type DESTROY-PROD-IT into the input to actually run.
+# The 5 destroy blockers (LB cleanup grace, SQL ABANDON, peering
+# cleanup, kubernetes provider try() fallbacks) are mitigated in code,
+# so a single-pass destroy is expected.
 
 on:
   workflow_dispatch:
@@ -27,78 +20,34 @@ permissions:
 
 env:
   PROJECT_ID: ${{ vars.PROJECT_ID }}
-  TF_VERSION: "1.9.8"
 
 jobs:
   destroy:
     runs-on: ubuntu-latest
-    # Recommended: pair with a GitHub Environment that requires reviewer
-    # approval before the job actually runs.
+    # Recommended: gate behind a GitHub Environment with required-reviewer rule.
     # environment: production-destroy
     if: ${{ inputs.confirm == 'DESTROY-PROD-IT' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install terraform ${{ env.TF_VERSION }}
-        run: |
-          set -euo pipefail
-          curl -fsSL https://apt.releases.hashicorp.com/gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
-            | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
-          sudo apt-get update -q
-          sudo apt-get install -y "terraform=${{ env.TF_VERSION }}-1"
-          terraform version
+      - uses: ./.github/actions/setup-tf-runner
+        with:
+          wif_provider:    ${{ secrets.GCP_WIF_TF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
+          project_id:      ${{ vars.PROJECT_ID }}
 
-      - name: Authenticate to GCP (WIF → terraform-runner)
-        env:
-          WIF_PROVIDER: ${{ secrets.GCP_WIF_TF_PROVIDER }}
-          SA_EMAIL:     ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          OIDC_FILE=$(mktemp); chmod 600 "$OIDC_FILE"
-          curl -sfH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://iam.googleapis.com/${WIF_PROVIDER}" \
-            | jq -er .value > "$OIDC_FILE"
-          CRED_FILE=$(mktemp --suffix=.json); chmod 600 "$CRED_FILE"
-          cat > "$CRED_FILE" <<EOF
-          {
-            "type": "external_account",
-            "audience": "//iam.googleapis.com/${WIF_PROVIDER}",
-            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-            "token_url": "https://sts.googleapis.com/v1/token",
-            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA_EMAIL}:generateAccessToken",
-            "credential_source": { "file": "${OIDC_FILE}", "format": { "type": "text" } }
-          }
-          EOF
-          gcloud auth login --cred-file="$CRED_FILE" --quiet
-          gcloud config set project "$PROJECT_ID" --quiet
-          echo "GOOGLE_APPLICATION_CREDENTIALS=${CRED_FILE}" >> "$GITHUB_ENV"
+      # Same stub-key trick as terraform-plan — destroy doesn't push the key
+      # anywhere, but file() needs to resolve before the destroy graph builds.
+      - name: Stub ArgoCD deploy key
+        run: ssh-keygen -t ed25519 -C ci-destroy-stub -f infrastructure/terraform/.argocd-deploy-key -N "" -q
 
-      # Same stub key approach as terraform-plan — destroy doesn't push
-      # the key anywhere new; it just needs file() to resolve so the
-      # plan phase of destroy doesn't error out.
-      - name: Stub deploy key
-        run: |
-          ssh-keygen -t ed25519 -C "ci-destroy-stub" \
-            -f infrastructure/terraform/.argocd-deploy-key -N "" -q
-
-      - name: terraform init
-        working-directory: infrastructure/terraform
-        run: terraform init -input=false -lock-timeout=180s
-
-      - name: terraform destroy
+      - name: terraform init + destroy
         working-directory: infrastructure/terraform
         env:
-          TF_VAR_project_id: ${{ vars.PROJECT_ID }}
+          TF_VAR_project_id:                 ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
         run: |
-          set -euo pipefail
-          # The 5 known destroy blockers are all mitigated in code
-          # (deletion_policy=ABANDON on SQL + service networking,
-          # time_sleep grace before helm_release, null_resource cleanup
-          # for the consumer-side peering, try() in provider config).
-          # A single-pass destroy is expected.
+          terraform init    -input=false -lock-timeout=180s
           terraform destroy -input=false -auto-approve -lock-timeout=600s
 
       - name: Post-destroy sanity check

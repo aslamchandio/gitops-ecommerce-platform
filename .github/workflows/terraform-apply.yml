@@ -1,16 +1,8 @@
 name: Terraform Apply
 
-# MANUAL trigger only — never on push/merge.
-#
-# Requires the user to type "APPLY" into the workflow_dispatch input
-# before the job will run. Combined with GitHub's branch protection
-# rules (require approval on workflow_dispatch from forks) this gives
-# a two-layer confirmation: typed input + repo-owner-only execution.
-#
-# Two-step bootstrap is required because kubernetes_manifest.ecom_application
-# needs a live cluster at plan time. Step 1 creates cluster + ArgoCD
-# helm release with -target; step 2 runs the full apply once the
-# cluster's OpenAPI is reachable.
+# Manual dispatch only — type APPLY into the input to actually run.
+# Two-step bootstrap: -target=cluster + helm first so kubernetes_manifest
+# can plan, then full apply.
 
 on:
   workflow_dispatch:
@@ -31,67 +23,33 @@ permissions:
 
 env:
   PROJECT_ID: ${{ vars.PROJECT_ID }}
-  TF_VERSION: "1.9.8"
 
 jobs:
   apply:
     runs-on: ubuntu-latest
-    # Optional: gate behind a GitHub Environment with required reviewer
-    # approval. Set up via Repo Settings -> Environments -> production.
+    # Optional: gate behind a GitHub Environment with required-reviewer rule.
     # environment: production
     if: ${{ inputs.confirm == 'APPLY' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install terraform ${{ env.TF_VERSION }}
-        run: |
-          set -euo pipefail
-          curl -fsSL https://apt.releases.hashicorp.com/gpg \
-            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
-            | sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
-          sudo apt-get update -q
-          sudo apt-get install -y "terraform=${{ env.TF_VERSION }}-1"
-          terraform version
+      - uses: ./.github/actions/setup-tf-runner
+        with:
+          wif_provider:    ${{ secrets.GCP_WIF_TF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
+          project_id:      ${{ vars.PROJECT_ID }}
 
-      - name: Authenticate to GCP (WIF → terraform-runner)
-        env:
-          WIF_PROVIDER: ${{ secrets.GCP_WIF_TF_PROVIDER }}
-          SA_EMAIL:     ${{ secrets.GCP_SERVICE_TF_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          OIDC_FILE=$(mktemp); chmod 600 "$OIDC_FILE"
-          curl -sfH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://iam.googleapis.com/${WIF_PROVIDER}" \
-            | jq -er .value > "$OIDC_FILE"
-          CRED_FILE=$(mktemp --suffix=.json); chmod 600 "$CRED_FILE"
-          cat > "$CRED_FILE" <<EOF
-          {
-            "type": "external_account",
-            "audience": "//iam.googleapis.com/${WIF_PROVIDER}",
-            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-            "token_url": "https://sts.googleapis.com/v1/token",
-            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SA_EMAIL}:generateAccessToken",
-            "credential_source": { "file": "${OIDC_FILE}", "format": { "type": "text" } }
-          }
-          EOF
-          gcloud auth login --cred-file="$CRED_FILE" --quiet
-          gcloud config set project "$PROJECT_ID" --quiet
-          echo "GOOGLE_APPLICATION_CREDENTIALS=${CRED_FILE}" >> "$GITHUB_ENV"
-
-      # ----- ArgoCD deploy key -----
-      # Write the real ed25519 private key from a GitHub secret to disk
-      # so terraform's file() reference in argocd_application.tf can
-      # read it. Without this, apply succeeds but ArgoCD can't pull
-      # from the gitops repo. Generate the secret value from:
-      #   cat infrastructure/terraform/.argocd-deploy-key | gh secret set ARGOCD_DEPLOY_KEY_PRIVATE
+      # Real deploy key written from secret. argocd_application.tf reads it
+      # via file() and stores it in a K8s Secret so ArgoCD can pull from the
+      # gitops repo. Generate the secret with:
+      #   gh secret set ARGOCD_DEPLOY_KEY_PRIVATE < infrastructure/terraform/.argocd-deploy-key
       - name: Materialize ArgoCD deploy key
         env:
           KEY: ${{ secrets.ARGOCD_DEPLOY_KEY_PRIVATE }}
         run: |
           set -euo pipefail
           if [[ -z "${KEY:-}" ]]; then
-            echo "::error::ARGOCD_DEPLOY_KEY_PRIVATE secret is empty. ArgoCD won't be able to pull from the repo."
+            echo "::error::ARGOCD_DEPLOY_KEY_PRIVATE secret is empty"
             exit 1
           fi
           umask 077
@@ -102,37 +60,28 @@ jobs:
         working-directory: infrastructure/terraform
         run: terraform init -input=false -lock-timeout=180s
 
-      # ----- Step 1: bootstrap cluster + ArgoCD helm release -----
-      # kubernetes_manifest.ecom_application requires a live cluster at
-      # plan time. We bring the cluster + helm_release up via -target
-      # first, then run a full apply in step 2 once the kubernetes
-      # provider can connect.
+      # Step 1: bring up cluster + ArgoCD so kubernetes_manifest can plan.
       - name: terraform apply (step 1 — bootstrap)
         working-directory: infrastructure/terraform
         env:
-          TF_VAR_project_id: ${{ vars.PROJECT_ID }}
+          TF_VAR_project_id:                 ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
         run: |
-          set -euo pipefail
           terraform apply -input=false -auto-approve -lock-timeout=300s \
             -target=google_container_cluster.primary \
             -target=google_container_node_pool.system \
             -target=helm_release.argocd
 
-      # ----- Step 2: full apply -----
+      # Step 2: full apply (skip if target_only=true).
       - name: terraform apply (step 2 — full)
         if: ${{ inputs.target_only != true }}
         working-directory: infrastructure/terraform
         env:
-          TF_VAR_project_id: ${{ vars.PROJECT_ID }}
+          TF_VAR_project_id:                 ${{ vars.PROJECT_ID }}
           TF_VAR_master_authorized_networks: '[]'
-        run: |
-          set -euo pipefail
-          terraform apply -input=false -auto-approve -lock-timeout=300s
+        run: terraform apply -input=false -auto-approve -lock-timeout=300s
 
       - name: terraform output
         if: always()
         working-directory: infrastructure/terraform
-        run: |
-          set +e
-          terraform output -no-color || true
+        run: terraform output -no-color || true
